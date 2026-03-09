@@ -1,10 +1,10 @@
+use regex::{Regex, RegexSet};
 use std::collections::HashMap;
 use std::fs::{self, FileType};
 use std::io::{self, BufRead, Lines};
 use std::path::Path;
 use std::sync::LazyLock;
 use thiserror::Error;
-use regex::{Regex, RegexSet};
 
 #[derive(Error, Debug)]
 pub enum MyError {
@@ -22,8 +22,35 @@ enum NotesPath {
 
 #[derive(Clone, Debug)]
 struct Note {
-    frontmatter: FrontMatter,
+    id: String,
+    aliases: Option<String>,
+    note_type: NoteType,
+    tags: Vec<Ref>,
+    references: Vec<Ref>,
+    body_tags: Vec<Ref>,
+    body_links: Vec<Ref>,
     contents: Vec<String>,
+    source_parents: Vec<String>,
+    author: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct Ref {
+    from: RefNode,
+    to: RefNode,
+    loc: RefLoc,
+}
+
+#[derive(Clone, Debug)]
+enum RefNode {
+    Note(String),
+    Tag(String),
+}
+
+#[derive(Clone, Debug)]
+enum RefLoc {
+    FrontMatter,
+    Body(u16),
 }
 
 pub type Result<T> = std::result::Result<T, MyError>;
@@ -31,9 +58,9 @@ type LinesIter = std::io::Lines<std::io::BufReader<std::fs::File>>;
 
 // #[derive(Debug)]
 enum ParseState {
-    NoFrontMatter(),
-    InFrontMatter(FrontMatterBuild),
-    CompletedFrontMatter(Note),
+    Nothing,
+    InYaml(FrontMatterBuild),
+    InMd(Note),
 }
 
 // #[derive(Debug)]
@@ -67,14 +94,14 @@ enum NoteType {
 
 fn main() -> Result<()> {
     // Read the current directory (".").
-    // let main_dir = Path::new("../testing/zettel");
-    // let test = read_dir(main_dir)?;
-    // print!("{:#?}", test);
+    let main_dir = Path::new("../zettel/");
+    let test = read_dir(main_dir)?;
+    print!("{:#?}", test);
 
     // let main_dir = Path::new("../testing/zettel");
     // read_file(Path::new("../testing/zettel/notes/social-form-things.md"))
 
-    parse_from_line();
+    // parse_from_line();
     Ok(())
 }
 
@@ -93,56 +120,60 @@ fn read_file(file: &Path) -> Result<Note> {
     let file = fs::File::open(file)?;
     let reader = io::BufReader::new(file);
 
-    // let x = reader.lines();
-    let (parsed, rest) = reader
-        .lines()
-        .fold_rest(ParseState::NoFrontMatter, |state, x| {
-            let x = x?;
-
-            match state {
-                ParseState::CompletedFrontMatter(note) => {
-                    Ok(FoldState::Break(ParseState::CompletedFrontMatter(note)))
-                }
-                _ => Ok(FoldState::Continue(parse_frontmatter(state, x)?)),
-            }
-        })?;
+    let (parsed, rest) = reader.lines().fold_rest(ParseState::Nothing, |state, x| {
+        let x = x?;
+        match state {
+            ParseState::InMd(note) => Ok(FoldState::Break(ParseState::InMd(note))),
+            _ => Ok(FoldState::Continue(parse_frontmatter(state, x)?)),
+        }
+    })?;
 
     let mut note = match parsed {
-        ParseState::CompletedFrontMatter(note) => Ok(note),
+        ParseState::InMd(note) => Ok(note),
         _ => Err(MyError::OtherError),
     }?;
 
-    note.contents = rest.map(|x| x.unwrap_or("".to_string())).collect();
+    let (contents, body_tags) =
+        rest.fold((vec![], vec![]), |(x, y): (Vec<String>, Vec<String>), z| {
+            let z = z.unwrap_or("".to_string());
+
+            let mut y = y;
+            let mut x = x;
+
+            y.append(&mut parse_from_line(&z));
+            x.push(z);
+            (x, y)
+        });
+
+    note.contents = contents;
+    // note.body_tags = body_tags;
 
     Ok(note)
 }
 
-fn parse_from_line() -> Result<()> {
-    let tag_regex = Regex::new(r"(#[a-zA-Z\-]*)").unwrap();
-    let text = "- A particular vulgarisation — *productive force determinism* ([Social Ontology of Economic Power][1]) — takes for granted that social development is determined by the (purely independent) development of the *productive forces*. ";
-
-    let tags = content_get_reference_links(text.to_string());
+fn parse_from_line(line: &str) -> Vec<String> {
+    let tags = content_get_tags(line);
     print!("{:#?}", tags);
-
-    Ok(())
+    tags
 }
 
-fn content_get_tags(line: String) -> Vec<String> {
-    static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(#[a-zA-Z\-]*)").unwrap());
+fn content_get_tags(line: &str) -> Vec<String> {
+    static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"#([a-zA-Z\-]+)").unwrap());
 
     let mut tags = vec![];
-    for (_, [tag]) in RE.captures_iter(line.as_str()).map(|c| c.extract()) {
+    for (_, [tag]) in RE.captures_iter(line).map(|c| c.extract()) {
         tags.push(tag.to_string());
     }
     tags
 }
 
 fn content_get_links(line: String) -> Vec<(String, String)> {
-    static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[\[([^\|\]]+)\|?([^\|\]]*)\]\]").unwrap());
+    static RE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\[\[([^\|\]]+)\|?([^\|\]]*)\]\]").unwrap());
 
     let mut links = vec![];
     for (_, [id, title]) in RE.captures_iter(line.as_str()).map(|c| c.extract()) {
-        links.push((id.to_string(),title.to_string()));
+        links.push((id.to_string(), title.to_string()));
     }
     links
 }
@@ -152,7 +183,7 @@ fn content_get_reference_links(line: String) -> Vec<(String, String)> {
 
     let mut links = vec![];
     for (_, [id, title]) in RE.captures_iter(line.as_str()).map(|c| c.extract()) {
-        links.push((id.to_string(),title.to_string()));
+        links.push((id.to_string(), title.to_string()));
     }
     links
 }
@@ -189,19 +220,17 @@ fn parse_frontmatter(state: ParseState, line: String) -> Result<ParseState> {
     let frontmatter_boundary = line == "---";
 
     match (state, frontmatter_boundary) {
-        (ParseState::NoFrontMatter, true) => Ok(init_frontmatter_parse()),
-        (ParseState::InFrontMatter(front_matter_build), false) => Ok(ParseState::InFrontMatter(
+        (ParseState::Nothing, true) => Ok(init_frontmatter_parse()),
+        (ParseState::InYaml(front_matter_build), false) => Ok(ParseState::InYaml(
             add_line_to_frontmatter(line, front_matter_build),
         )),
-        (ParseState::InFrontMatter(front_matter_build), true) => {
-            format_frontmatter(front_matter_build)
-        }
+        (ParseState::InYaml(front_matter_build), true) => format_frontmatter(front_matter_build),
         _ => Err(MyError::OtherError),
     }
 }
 
 fn init_frontmatter_parse() -> ParseState {
-    ParseState::InFrontMatter(FrontMatterBuild {
+    ParseState::InYaml(FrontMatterBuild {
         id: None,
         aliases: None,
         note_type: None,
@@ -248,18 +277,34 @@ fn add_line_to_frontmatter(line: String, front_matter_build: FrontMatterBuild) -
 
 fn format_frontmatter(front_matter_build: FrontMatterBuild) -> Result<ParseState> {
     let note_type = front_matter_build.note_type.ok_or(MyError::OtherError)?;
-
-    Ok(ParseState::CompletedFrontMatter(Note {
-        frontmatter: FrontMatter {
-            id: front_matter_build.id.ok_or(MyError::OtherError)?,
-            aliases: front_matter_build.aliases,
-            note_type: note_type_from_string(note_type)?,
-            tags: front_matter_build.tags.unwrap_or(vec![]),
-            references: front_matter_build.references.unwrap_or(vec![]),
-            source_parents: front_matter_build.source_parents.unwrap_or(vec![]),
-            author: front_matter_build.author.unwrap_or(vec![]),
-        },
+    let id = front_matter_build.id.ok_or(MyError::OtherError)?;
+    Ok(ParseState::InMd(Note {
+        id: id.clone(),
+        aliases: front_matter_build.aliases,
+        note_type: note_type_from_string(note_type)?,
+        tags: front_matter_build
+            .tags
+            .unwrap_or(vec![])
+            .iter()
+            .map(|x| Ref {
+                from: RefNode::Note(id.clone()),
+                to: RefNode::Tag(x.to_string()),
+                loc: RefLoc::FrontMatter,
+            })
+            .collect(),
+        references: front_matter_build.references.unwrap_or(vec![])
+            .iter()
+            .map(|x| Ref {
+                from: RefNode::Note(id.clone()),
+                to: RefNode::Note(x.to_string()),
+                loc: RefLoc::FrontMatter,
+            })
+            .collect(),
+        source_parents: front_matter_build.source_parents.unwrap_or(vec![]),
+        author: front_matter_build.author.unwrap_or(vec![]),
         contents: vec![],
+        body_tags: vec![],
+        body_links: vec![],
     }))
 }
 
