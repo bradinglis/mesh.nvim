@@ -1,6 +1,5 @@
-use regex::{Regex, RegexSet};
-use std::collections::HashMap;
-use std::fs::{self, FileType};
+use regex::{Regex};
+use std::fs::{self};
 use std::io::{self, BufRead, Lines};
 use std::path::Path;
 use std::sync::LazyLock;
@@ -29,9 +28,11 @@ struct Note {
     references: Vec<Ref>,
     body_tags: Vec<Ref>,
     body_links: Vec<Ref>,
-    contents: Vec<String>,
+    contents: Vec<ContentLine>,
     source_parents: Vec<String>,
     author: Vec<String>,
+    lines: Option<usize>,
+    frontmatter_lines: Option<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -39,22 +40,23 @@ struct Ref {
     from: RefNode,
     to: RefNode,
     loc: RefLoc,
+    alias: Option<String>,
 }
 
 #[derive(Clone, Debug)]
 enum RefNode {
     Note(String),
     Tag(String),
+    Local(usize),
 }
 
 #[derive(Clone, Debug)]
 enum RefLoc {
     FrontMatter,
-    Body(u16),
+    Body(usize),
 }
 
 pub type Result<T> = std::result::Result<T, MyError>;
-type LinesIter = std::io::Lines<std::io::BufReader<std::fs::File>>;
 
 // #[derive(Debug)]
 enum ParseState {
@@ -86,6 +88,13 @@ struct FrontMatter {
 }
 
 #[derive(Clone, Debug)]
+struct ContentLine {
+    text: String,
+    line_num: usize,
+    note: String,
+}
+
+#[derive(Clone, Debug)]
 enum NoteType {
     Source,
     Author,
@@ -94,12 +103,13 @@ enum NoteType {
 
 fn main() -> Result<()> {
     // Read the current directory (".").
-    let main_dir = Path::new("../zettel/");
-    let test = read_dir(main_dir)?;
-    print!("{:#?}", test);
+    // let main_dir = Path::new("../zettel/");
+    // let test = read_dir(main_dir)?;
+    // print!("{:#?}", test);
 
     // let main_dir = Path::new("../testing/zettel");
-    // read_file(Path::new("../testing/zettel/notes/social-form-things.md"))
+    let x = read_file(Path::new("../testing/zettel/sources/s_neel_arms-hand.md"));
+    print!("{:#?}", x);
 
     // parse_from_line();
     Ok(())
@@ -120,72 +130,186 @@ fn read_file(file: &Path) -> Result<Note> {
     let file = fs::File::open(file)?;
     let reader = io::BufReader::new(file);
 
-    let (parsed, rest) = reader.lines().fold_rest(ParseState::Nothing, |state, x| {
-        let x = x?;
-        match state {
-            ParseState::InMd(note) => Ok(FoldState::Break(ParseState::InMd(note))),
-            _ => Ok(FoldState::Continue(parse_frontmatter(state, x)?)),
-        }
-    })?;
+    let ((parsed, frontmatter_line_num), rest): ((ParseState, usize), _) = reader
+        .lines()
+        .fold_rest((ParseState::Nothing, 0), |(state, line_num), x| {
+            let line_num = line_num + 1;
+            let x = x?;
+            match state {
+                ParseState::InMd(note) => Ok(FoldState::Break((ParseState::InMd(note), line_num))),
+                _ => Ok(FoldState::Continue((
+                    parse_frontmatter(state, x)?,
+                    line_num,
+                ))),
+            }
+        })?;
 
     let mut note = match parsed {
         ParseState::InMd(note) => Ok(note),
         _ => Err(MyError::OtherError),
     }?;
 
-    let (contents, body_tags) =
-        rest.fold((vec![], vec![]), |(x, y): (Vec<String>, Vec<String>), z| {
-            let z = z.unwrap_or("".to_string());
+    note.frontmatter_lines = Some(frontmatter_line_num);
+    let id = note.id.clone();
 
-            let mut y = y;
-            let mut x = x;
 
-            y.append(&mut parse_from_line(&z));
-            x.push(z);
-            (x, y)
+    let (contents, body_tags, body_links, refs, ref_list, line_num) = rest
+        .fold((vec![], vec![], vec![], vec![], vec![], 0), |x, y| {
+            parse_body(x, y, &id)
         });
 
+    let mut ref_list = ref_list;
+
+    ref_list.sort_by_key(|x| match x.from {
+        RefNode::Note(_) => 999,
+        RefNode::Tag(_) => 999,
+        RefNode::Local(x) => x,
+    });
+
+    let refs = refs
+        .iter()
+        .map(|x| Ref {
+            from: x.from.clone(),
+            to: {
+                match x.to.clone() {
+                    RefNode::Local(y) => ref_list[y].to.clone(),
+                    z => z,
+                }
+            },
+            loc: x.loc.clone(),
+            alias: x.alias.clone(),
+        })
+        .collect();
+
     note.contents = contents;
-    // note.body_tags = body_tags;
+    note.body_tags = body_tags;
+    note.body_links = app(body_links, refs);
+    note.lines = Some(line_num);
 
     Ok(note)
 }
 
-fn parse_from_line(line: &str) -> Vec<String> {
-    let tags = content_get_tags(line);
-    print!("{:#?}", tags);
-    tags
+fn parse_body(
+    (contents, body_tags, body_links, refs, ref_list, line_num): (
+        Vec<ContentLine>,
+        Vec<Ref>,
+        Vec<Ref>,
+        Vec<Ref>,
+        Vec<Ref>,
+        usize,
+    ),
+    z: std::result::Result<String, io::Error>,
+    note_id: &str,
+) -> (
+    Vec<ContentLine>,
+    Vec<Ref>,
+    Vec<Ref>,
+    Vec<Ref>,
+    Vec<Ref>,
+    usize,
+) {
+    let text = z.unwrap_or("".to_string());
+    let line_num = line_num + 1;
+
+    let (tags, links, n_refs, n_ref_list) = parse_from_line(&text, note_id, &line_num);
+
+    let body_tags = app(body_tags, tags);
+    let body_links = app(body_links, links);
+    let refs = app(refs, n_refs);
+    let ref_list = app(ref_list, n_ref_list);
+
+    let contents = push(
+        contents,
+        ContentLine {
+            note: note_id.to_string(),
+            text,
+            line_num,
+        },
+    );
+
+    (contents, body_tags, body_links, refs, ref_list, line_num)
 }
 
-fn content_get_tags(line: &str) -> Vec<String> {
+fn app<T>(mut first: Vec<T>, mut second: Vec<T>) -> Vec<T> {
+    first.append(&mut second);
+    first
+}
+
+fn push<T>(mut first: Vec<T>, second: T) -> Vec<T> {
+    first.push(second);
+    first
+}
+
+fn parse_from_line(line: &str, id: &str, lnum: &usize) -> (Vec<Ref>, Vec<Ref>, Vec<Ref>, Vec<Ref>) {
+    let tags = content_get_tags(line, id, lnum);
+    let links = content_get_links(line, id, lnum);
+    let refs_intext = content_get_reference_intext(line, id, lnum);
+    let refs_list = content_get_reference_list(line, id, lnum);
+    (tags, links, refs_intext, refs_list)
+}
+
+fn content_get_tags(line: &str, id: &str, lnum: &usize) -> Vec<Ref> {
     static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"#([a-zA-Z\-]+)").unwrap());
 
     let mut tags = vec![];
     for (_, [tag]) in RE.captures_iter(line).map(|c| c.extract()) {
-        tags.push(tag.to_string());
+        tags.push(Ref {
+            from: RefNode::Note(id.to_string()),
+            to: RefNode::Tag(tag.to_string()),
+            loc: RefLoc::Body(*lnum),
+            alias: None,
+        });
     }
     tags
 }
 
-fn content_get_links(line: String) -> Vec<(String, String)> {
+fn content_get_links(line: &str, id: &str, lnum: &usize) -> Vec<Ref> {
     static RE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"\[\[([^\|\]]+)\|?([^\|\]]*)\]\]").unwrap());
 
     let mut links = vec![];
-    for (_, [id, title]) in RE.captures_iter(line.as_str()).map(|c| c.extract()) {
-        links.push((id.to_string(), title.to_string()));
+    for (_, [to_id, title]) in RE.captures_iter(line).map(|c| c.extract()) {
+        links.push(Ref {
+            from: RefNode::Note(id.to_string()),
+            to: RefNode::Note(to_id.to_string()),
+            loc: RefLoc::Body(*lnum),
+            alias: Some(title.to_string()),
+        });
     }
     links
 }
 
-fn content_get_reference_links(line: String) -> Vec<(String, String)> {
-    static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\[([0-9]+)\]").unwrap());
-
-    let mut links = vec![];
-    for (_, [id, title]) in RE.captures_iter(line.as_str()).map(|c| c.extract()) {
-        links.push((id.to_string(), title.to_string()));
+fn content_get_reference_intext(line: &str, id: &str, lnum: &usize) -> Vec<Ref> {
+    static RE_INTEXT: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\[([0-9]+)\]").unwrap());
+    let mut in_text_links = vec![];
+    for (_, [name, ref_num]) in RE_INTEXT.captures_iter(line).map(|c| c.extract()) {
+        in_text_links.push(Ref {
+            from: RefNode::Note(id.to_string()),
+            to: RefNode::Local(ref_num.parse().unwrap_or(0)),
+            loc: RefLoc::Body(*lnum),
+            alias: Some(name.to_string()),
+        });
     }
-    links
+
+    in_text_links
+}
+
+fn content_get_reference_list(line: &str, _id: &str, lnum: &usize) -> Vec<Ref> {
+    static RE_REF: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"\[([0-9]+)\]: (.+)").unwrap());
+    let mut in_text_links = vec![];
+
+    for (_, [ref_num, to_id]) in RE_REF.captures_iter(line).map(|c| c.extract()) {
+        in_text_links.push(Ref {
+            from: RefNode::Local(ref_num.parse().unwrap_or(0)),
+            to: RefNode::Note(to_id.to_string()),
+            loc: RefLoc::Body(*lnum),
+            alias: None,
+        });
+    }
+
+    in_text_links
 }
 
 fn read_dir(dir: &Path) -> Result<Vec<NotesPath>> {
@@ -290,14 +414,18 @@ fn format_frontmatter(front_matter_build: FrontMatterBuild) -> Result<ParseState
                 from: RefNode::Note(id.clone()),
                 to: RefNode::Tag(x.to_string()),
                 loc: RefLoc::FrontMatter,
+                alias: None,
             })
             .collect(),
-        references: front_matter_build.references.unwrap_or(vec![])
+        references: front_matter_build
+            .references
+            .unwrap_or(vec![])
             .iter()
             .map(|x| Ref {
                 from: RefNode::Note(id.clone()),
                 to: RefNode::Note(x.to_string()),
                 loc: RefLoc::FrontMatter,
+                alias: None,
             })
             .collect(),
         source_parents: front_matter_build.source_parents.unwrap_or(vec![]),
@@ -305,6 +433,8 @@ fn format_frontmatter(front_matter_build: FrontMatterBuild) -> Result<ParseState
         contents: vec![],
         body_tags: vec![],
         body_links: vec![],
+        frontmatter_lines: None,
+        lines: None,
     }))
 }
 
