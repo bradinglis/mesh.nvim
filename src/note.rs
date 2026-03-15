@@ -1,36 +1,40 @@
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
+
 use crate::output;
 use crate::{MyError, Result};
 use serde::{Deserialize, Serialize};
 
-// pub(crate) use crate::parse::body::BodyParsing;
-
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Note {
-    id: String,
-    aliases: Option<String>,
-    note_type: NoteType,
-    tags: Vec<Ref>,
-    links: Vec<Ref>,
-    contents: Vec<ContentLine>,
-    source_parents: Vec<String>,
-    author: Vec<String>,
-    lines: usize,
-    frontmatter_lines: usize,
+    pub(crate) id: String,
+    pub(crate) aliases: Option<String>,
+    pub(crate) note_type: NoteType,
+    pub(crate) tags: Vec<Ref>,
+    pub(crate) links: Vec<Ref>,
+    pub(crate) contents: Vec<ContentLine>,
+    pub(crate) source_parents: Vec<String>,
+    pub(crate) author: Vec<String>,
+    pub(crate) lines: usize,
+    pub(crate) frontmatter_lines: usize,
+    pub(crate) path: PathBuf,
+    pub(crate) hash: u64,
+    pub(crate) modified: SystemTime,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct ContentLine {
-    text: String,
-    line_num: usize,
-    note: String,
+    pub(crate) note_id: String,
+    pub(crate) text: String,
+    pub(crate) line_num: usize,
 }
 
 impl ContentLine {
-    pub(crate) fn new(text: String, line_num: usize, note: String) -> Self {
+    pub(crate) fn new(text: String, line_num: usize, note_id: String) -> Self {
         Self {
             text,
             line_num,
-            note,
+            note_id,
         }
     }
 }
@@ -43,14 +47,24 @@ pub(crate) enum NoteType {
 }
 
 impl NoteType {
-    fn note_type_from_string(s: String) -> Result<Self> {
+    pub fn from_string(s: String) -> Result<Self> {
         match s.as_str() {
             "author" => Ok(Self::Author),
             "source" => Ok(Self::Source),
             "note" => Ok(Self::Note),
-            _ => Err(MyError::OtherError),
+            _ => Err(MyError::ParseError("note type unknown".to_string())),
         }
     }
+
+    pub fn to_string(self) -> String {
+        match self {
+            NoteType::Source => "source".to_string(),
+            NoteType::Author => "author".to_string(),
+            NoteType::Note => "note".to_string(),
+        }
+    }
+
+
 }
 
 impl Note {
@@ -65,6 +79,9 @@ impl Note {
         author: Vec<String>,
         lines: usize,
         frontmatter_lines: usize,
+        path: PathBuf,
+        hash: u64,
+        modified: SystemTime,
     ) -> Self {
         Self {
             id,
@@ -77,6 +94,9 @@ impl Note {
             author,
             lines,
             frontmatter_lines,
+            path,
+            hash,
+            modified
         }
     }
 
@@ -115,10 +135,10 @@ impl Note {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Ref {
-    from: RefNode,
-    to: RefNode,
-    loc: RefLoc,
-    alias: Option<String>,
+    pub(crate) from: RefNode,
+    pub(crate) to: RefNode,
+    pub(crate) loc: RefLoc,
+    pub(crate) alias: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -141,6 +161,14 @@ impl Ref {
             to,
             loc,
             alias,
+        }
+    }
+
+    pub(crate) fn get_tag(&self) -> Result<String> {
+        if let RefNode::Tag(x) = &self.to {
+            Ok(x.clone())
+        } else {
+            Err(MyError::OtherError)
         }
     }
 

@@ -1,10 +1,20 @@
 [package]
-name = "markdown-db"
+name = "markdown_db"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+crate-type = ["cdylib"]
+
 [dependencies]
+duckdb = { version = "1.10500.0", features = ["bundled"] }
+mlua = {version = "0.11.6", features = ["module", "luajit"]}
+rapidhash = "4.4.1"
 regex = "1.12.3"
 serde = {version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 thiserror = "2.0.18"
+
+[profile.release]
+codegen-units = 1
+lto = "fat"

@@ -2,103 +2,120 @@ mod fold_rest;
 mod parse;
 mod note;
 mod output;
+mod file;
+mod db;
+mod lib;
 
-use regex::Regex;
-use serde::{Deserialize, Serialize};
-use std::fs::{self};
-use std::io::{self, BufRead, Lines};
+use std::collections::HashMap;
+use std::env;
+use std::io::{BufReader, BufWriter, stdout};
+use std::fs;
 use std::path::Path;
-use std::sync::LazyLock;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use thiserror::Error;
+use duckdb::{params, Connection};
+use rapidhash;
 
-use crate::fold_rest::FoldRest;
-// use crate::note;
+use crate::db::Db;
+// use crate::file::NotesPath;
+use crate::lib::db_get;
 
 pub type Result<T> = std::result::Result<T, MyError>;
+
 #[derive(Error, Debug)]
 pub enum MyError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+    #[error("DuckDB error: {0}")]
+    DuckDb(#[from] duckdb::Error),
     #[error("Json error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("File error: {0}")]
+    FileError(String),
+    #[error("Parse error: {0}")]
+    ParseError(String),
     #[error("A custom error occurred")]
     OtherError,
 }
 
-#[derive(Clone, Debug)]
-enum NotesPath {
-    File(note::Note),
-    Dir(Vec<NotesPath>),
+pub trait MyResult {
+    
+    fn i(self) -> Self; 
 }
 
+impl<T> MyResult for Result<T> {
 
-
-fn get_notes(test: Vec<NotesPath>) -> Vec<note::Note> {
-    let mut res = vec![];
-    for x in test {
-        match x {
-            NotesPath::File(note) => res.push(note),
-            NotesPath::Dir(notes_paths) => res.append(&mut get_notes(notes_paths)),
+    fn i(self) -> Self {
+        match self {
+            Err(y) => {
+                eprintln!("Error: {}", y);
+                Err(y)
+            },
+            x => x,
         }
+
     }
-
-    res
-}
-
-fn get_note_outputs(test: Vec<NotesPath>) -> Vec<NoteOutput> {
-    let mut res = vec![];
-    for x in test {
-        match x {
-            NotesPath::File(note) => res.push(note.to_output()),
-            NotesPath::Dir(notes_paths) => res.append(&mut get_note_outputs(notes_paths)),
-        }
-    }
-
-    res
-}
-
-fn get_refs(test: &[Note]) -> Vec<Ref> {
-    let mut res = vec![];
-
-    test.iter().for_each(|x| {
-        res.extend(x.tags.clone());
-        res.extend(x.links.clone());
-    });
-
-    res
-}
-
-
-fn get_outputs(test: &[Note]) -> Vec<RefOutput> {
-    let mut res = vec![];
-
-    test.iter().for_each(|x| {
-        x.tags.iter().for_each(|y| res.push(y.clone().to_output_struct()));
-        x.links.iter().for_each(|y| res.push(y.clone().to_output_struct()));
-    });
-
-    res
 }
 
 fn main() -> Result<()> {
-    let cache = Path::new("../testing/zettel/cache.json");
-    // // Read the current directory (".").
-    // let s = Instant::now();
-    // let main_dir = Path::new("../testing/zettel/");
-    // let test = read_dir(main_dir)?;
-    // let x = get_notes(test);
-    // // let y = get_refs(&x);
+    // let path = Path::new("/home/brad/zettel/notes/abstract-labour.md");
+    // // let file = fs::File::open(path);
+    // let hash = rapidhash::v3::rapidhash_v3_file(file)?;
     //
-    // // let out = Output {
-    // //     references: y,
-    // //     notes: x,
+
+    // let x = db_get()?;
+
+    // println!("{:#?}", x);
+    
+    let cache_file = Path::new("/home/brad/.cache/markdown_db.duckdb");
+    // let main_dir = Path::new("../zettel/");
+    //
+    // let s = Instant::now();
+    // let mut args = env::args();
+    //
+    let conn = Connection::open(cache_file)?;
+    //
+    let (test, test2) = file::Paths::go()?;
+
+    print!("{:#?}", test);
+    print!("{:#?}", test2);
+
+    let x = Db::from_notes(test2, test)?;
+
+    // x.create_db(&conn)?;
+    //
+    x.commit_db(conn).i()?;
+    //
+    // // let _arg0 = args.next();
+    // //
+    // // let arg1 = args.next();
+    // // let arg2 = args.next();
+    // //
+    // // let first = arg1.as_deref();
+    // // let second = arg2.as_deref();
+    // //
+    // // match (first, second) {
+    // //     (Some("index"), _) => index(cache_file, main_dir)?,
+    // //     (Some("list"), Some("tags")) => list_tags(cache_file)?,
+    // //     (Some("list"), Some("notes")) => list_notes(cache_file)?,
+    // //     (Some("list"), Some("contents")) => index(cache_file, main_dir)?,
+    // //     _ => print_help(),
     // // };
     //
-    // // let s = Instant::now();
-    // // // println!("{}", serde_json::to_string(&out)?);
-    // // let normal = s.elapsed();
     //
+    //
+    // // let x = get_notes(test);
+    // // let y = get_refs(&x);
+    // //
+    // // // let out = Output {
+    // // //     references: y,
+    // // //     notes: x,
+    // // // };
+    // //
+    // // // let s = Instant::now();
+    // // // // println!("{}", serde_json::to_string(&out)?);
+    // // // let normal = s.elapsed();
+    // //
     // // let s2 = Instant::now();
     // //
     // // let aa = s2.elapsed();
@@ -115,10 +132,10 @@ fn main() -> Result<()> {
     // //
     // let write = s.elapsed();
     //
-    let s = Instant::now();
-    let x: Vec<Note> = serde_json::from_str(&std::fs::read_to_string(cache)?)?;
-
-    let y = get_refs(&x);
+    // let s = Instant::now();
+    // let x: Vec<Note> = serde_json::from_str(&std::fs::read_to_string(cache)?)?;
+    //
+    // let y = get_refs(&x);
     // let notes = x.iter().map(|y| y.clone().to_output()).collect();
 
     // let out = OutputToo {
@@ -133,136 +150,107 @@ fn main() -> Result<()> {
     //     }
     // }).collect();
 
-    let contents: Vec<ContentLine> = x.iter().flat_map(|x| x.clone().contents).collect();
-
-    let read = s.elapsed();
-    println!("{}", serde_json::to_string_pretty(&contents)?);
-    println!("read: {:#?}", read);
+    // let contents: Vec<ContentLine> = x.iter().flat_map(|x| x.clone().contents).collect();
+    //
+    // let read = s.elapsed();
+    // println!("{}", serde_json::to_string_pretty(&contents)?);
+    // println!("read: {:#?}", read);
 
     Ok(())
 }
 
-
-fn read_file(file: &Path) -> Result<Note> {
-    if file.extension().and_then(|x| x.to_str()).unwrap_or("") != "md" {
-        return Err(MyError::OtherError);
-    }
-
-    let start = Instant::now();
-    let file = fs::File::open(file)?;
-    let reader = io::BufReader::new(file);
-
-    let ((parsed, frontmatter_line_num), rest): ((ParseState, usize), _) = reader
-        .lines()
-        .fold_rest((ParseState::Nothing, 0), |(state, line_num), x| {
-            let line_num = line_num + 1;
-            let x = x?;
-            match state {
-                ParseState::InMd(note) => Ok(FoldState::Break((ParseState::InMd(note), line_num))),
-                _ => Ok(FoldState::Continue((
-                    parse_frontmatter(state, x)?,
-                    line_num,
-                ))),
-            }
-        })?;
-
-    let note = match parsed {
-        ParseState::InMd(note) => Ok(note),
-        _ => Err(MyError::OtherError),
-    }?;
-
-    let mut parser = BodyParsing::init(note, frontmatter_line_num);
-
-    parser.parse_lines(rest);
-
-    let note = parser.consume();
-
-    let duration = start.elapsed();
-    // println!("Time for parsing note: {:?}", duration);
-
-    Ok(note)
+fn print_help() -> () {
+    println!("What!!");
 }
 
-
-// fn parse_body(
-//     content: BodyParsing,
-//     z: std::result::Result<String, io::Error>,
-//     note_id: &str,
-// ) -> BodyParsing {
-//     let text = z.unwrap_or("".to_string());
-//     let line_num = line_num + 1;
+// fn index(cache_file: &Path, main_dir: &Path) -> Result<()> {
+//     // let file = std::fs::File::create(cache_file)?;
+//     let test = file::read_path(main_dir).i()?.get_note_outputs()?;
 //
-//     let start = Instant::now();
-//     let (tags, links, n_refs, n_ref_list) = parse_from_line(&text, note_id, &line_num);
-//     let duration = start.elapsed();
-//     println!("Time to parse line: {:?}", duration);
+//     let x = Db::from_notes(test)?;
 //
-//     let start = Instant::now();
-//     let body_tags = app(body_tags, tags);
-//     let body_links = app(body_links, links);
-//     let refs = app(refs, n_refs);
-//     let ref_list = app(ref_list, n_ref_list);
-//     let contents = push(
-//         contents,
-//         ContentLine {
-//             note: note_id.to_string(),
-//             text,
-//             line_num,
-//         },
-//     );
-//     let duration = start.elapsed();
-//     println!("Time to add to vectors: {:?}", duration);
+//     // let writer = BufWriter::new(file);
+//     let writer = BufWriter::new(stdout());
 //
-//     (contents, body_tags, body_links, refs, ref_list, line_num)
+//     serde_json::to_writer_pretty(writer, &x)?;
+//     Ok(())
 // }
 //
-fn app<T>(mut first: Vec<T>, mut second: Vec<T>) -> Vec<T> {
-    first.append(&mut second);
-    first
-}
-
-// fn app_refs(mut first: Vec<Ref>, mut second: InterimNote) -> Vec<Ref> {
-//     first.append(&mut second.tags);
-//     first.append(&mut second.links);
-//     first.append(&mut second.references);
-//     first
+// fn list_notes(cache_file: &Path) -> Result<()> {
+//     let file = std::fs::File::open(cache_file)?;
+//     let reader = BufReader::new(file);
+//     let x: Vec<note::Note> = serde_json::from_reader(reader)?;
+//
+//
+//     let writer = BufWriter::new(stdout());
+//     serde_json::to_writer(writer, &x)?;
+//
+//     Ok(())
+//
 // }
-
-fn push<T>(mut first: Vec<T>, second: T) -> Vec<T> {
-    first.push(second);
-    first
-}
-
-// fn parse_from_line(line: &str, id: &str, lnum: &usize) -> (Vec<Ref>, Vec<Ref>, Vec<Ref>, Vec<Ref>) {
-//     let tags = content_get_tags(line, id, lnum);
-//     let links = content_get_links(line, id, lnum);
-//     let refs_intext = content_get_reference_intext(line, id, lnum);
-//     let refs_list = content_get_reference_list(line, id, lnum);
-//     (tags, links, refs_intext, refs_list)
+//
+// fn list_tags(cache_file: &Path) -> Result<()> {
+//
+//     let file = std::fs::File::open(cache_file)?;
+//     let reader = BufReader::new(file);
+//     let x: Vec<note::Note> = serde_json::from_reader(reader)?;
+//
+//     let tags = tags(x);
+//
+//     let writer = BufWriter::new(stdout());
+//     serde_json::to_writer_pretty(writer, &tags)?;
+//
+//     Ok(())
+//
 // }
-
-fn read_dir(dir: &Path) -> Result<Vec<NotesPath>> {
-    let dir_name = dir.file_name().and_then(|x| x.to_str()).unwrap_or("");
-    if dir_name == ".git" || dir_name == "templates" {
-        return Err(MyError::OtherError);
-    }
-
-    let something: Vec<NotesPath> = fs::read_dir(dir)?
-        .map(|entry| {
-            let entry = entry?;
-            read_path(entry.path().as_path())
-        })
-        .filter_map(|x| x.ok())
-        .collect();
-
-    Ok(something)
-}
-
-fn read_path(path: &Path) -> Result<NotesPath> {
-    match (path.is_dir(), path.is_file()) {
-        (true, _) => Ok(NotesPath::Dir(read_dir(path)?)),
-        (_, true) => Ok(NotesPath::File(read_file(path)?)),
-        (_, _) => Err(MyError::OtherError),
-    }
-    // Ok(())
-}
+//
+// fn tags(test: Vec<note::Note>) -> HashMap<String, Vec<note::Ref>> {
+//     // let mut res = vec![];
+//     // test.iter().for_each(|x| {
+//     //     res.extend(x.tags.clone());
+//     // });
+//
+//     let grouped: HashMap<String, Vec<note::Ref>> = 
+//         test.into_iter().fold(HashMap::new(), |mut acc, val| {
+//             val.tags.into_iter().for_each(|tag| {
+//                 if let Ok(x) = tag.get_tag() {
+//                     acc.entry(x).or_default().push(tag);
+//                 }
+//             });
+//             acc
+//         }
+// );
+//     //     res.into_iter().fold(HashMap::new(), |mut acc, val| {
+//     //     if let Ok(x) = val.get_tag() {
+//     //         acc.entry(x).or_default().push(val);
+//     //     }
+//     //     acc
+//     // });
+//
+//     grouped
+// }
+//
+// //
+// //
+// // fn get_outputs(test: &[Note]) -> Vec<RefOutput> {
+// //     let mut res = vec![];
+// //
+// //     test.iter().for_each(|x| {
+// //         x.tags.iter().for_each(|y| res.push(y.clone().to_output_struct()));
+// //         x.links.iter().for_each(|y| res.push(y.clone().to_output_struct()));
+// //     });
+// //
+// //     res
+// // }
+// //
+//
+// // fn get_notes(test: Vec<NotesPath>) -> Vec<note::Note> {
+// //     let mut res = vec![];
+// //     for x in test {
+// //         match x {
+// //             NotesPath::File(note) => res.push(note),
+// //             NotesPath::Dir(notes_paths) => res.append(&mut get_notes(notes_paths)),
+// //         }
+// //     }
+// //     res
+// // }

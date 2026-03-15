@@ -1,13 +1,11 @@
-// use crate::fold_rest::FoldRest;
 use crate::parse::LinesIter;
 use std::path::PathBuf;
+use std::time::SystemTime;
 
 use crate::{MyError, Result};
 use regex::Regex;
-// use std::fs::{self};
-use std::io::{self, Lines};
+use std::io::{self};
 use std::sync::LazyLock;
-use thiserror::Error;
 
 use crate::note::{ContentLine, Note, NoteType, Ref, RefLoc, RefNode};
 
@@ -25,6 +23,7 @@ pub(crate) struct BodyParsing {
     source_parents: Vec<String>,
     author: Vec<String>,
     frontmatter_lines: usize,
+    path: PathBuf,
 }
 
 #[derive(Debug)]
@@ -71,7 +70,7 @@ impl InterimNote {
 
 impl BodyParsing {
     pub(crate) fn init(note: InterimNote) -> Result<(Self, LinesIter)> {
-        let rest =  note.rest.ok_or(MyError::OtherError)?;
+        let rest =  note.rest.ok_or(MyError::ParseError("reader not working".to_string()))?;
         Ok((BodyParsing {
             id: note.id,
             contents: vec![],
@@ -86,10 +85,11 @@ impl BodyParsing {
             source_parents: note.source_parents,
             author: note.author,
             frontmatter_lines: note.frontmatter_lines,
+            path: note.path,
         }, rest))
     }
 
-    pub(crate) fn consume(mut self) -> Note {
+    pub(crate) fn consume(mut self, hash: u64, modified: SystemTime) -> Note {
         self.ref_list.sort_by_key(|x| x.key());
 
         self.refs.into_iter().for_each(|x| {
@@ -110,6 +110,9 @@ impl BodyParsing {
             self.author,
             self.line_num,
             self.frontmatter_lines,
+            self.path,
+            hash,
+            modified
         )
     }
 
@@ -155,10 +158,10 @@ impl BodyParsing {
         }
     }
 
-    fn get_reference_intext(&mut self, line: &String) {
+    fn get_reference_intext(&mut self, line: &str) {
         static RE_INTEXT: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\[([0-9]+)\]").unwrap());
-        for (_, [name, ref_num]) in RE_INTEXT.captures_iter(&line).map(|c| c.extract()) {
+        for (_, [name, ref_num]) in RE_INTEXT.captures_iter(line).map(|c| c.extract()) {
             self.refs.push(Ref::new(
                 RefNode::Note(self.id.to_string()),
                 RefNode::Local(ref_num.parse().unwrap_or(0)),
