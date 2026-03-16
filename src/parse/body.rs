@@ -28,44 +28,16 @@ pub(crate) struct BodyParsing {
 
 #[derive(Debug)]
 pub struct InterimNote {
-    id: String,
-    aliases: Option<String>,
-    note_type: NoteType,
-    tags: Vec<Ref>,
-    references: Vec<Ref>,
-    source_parents: Vec<String>,
-    author: Vec<String>,
-    frontmatter_lines: usize,
-    rest: Option<LinesIter>,
-    path: PathBuf,
-}
-
-impl InterimNote {
-    pub fn new(
-        id: String,
-        aliases: Option<String>,
-        note_type: NoteType,
-        tags: Vec<Ref>,
-        references: Vec<Ref>,
-        source_parents: Vec<String>,
-        author: Vec<String>,
-        frontmatter_lines: usize,
-        rest: Option<LinesIter>,
-        path: PathBuf,
-    ) -> Self {
-        Self {
-            id,
-            aliases,
-            note_type,
-            tags,
-            references,
-            source_parents,
-            author,
-            rest,
-            frontmatter_lines,
-            path,
-        }
-    }
+    pub(super) id: String,
+    pub(super) aliases: Option<String>,
+    pub(super) note_type: NoteType,
+    pub(super) tags: Vec<Ref>,
+    pub(super) references: Vec<Ref>,
+    pub(super) source_parents: Vec<String>,
+    pub(super) author: Vec<String>,
+    pub(super) frontmatter_lines: usize,
+    pub(super) rest: Option<LinesIter>,
+    pub(super) path: PathBuf,
 }
 
 impl BodyParsing {
@@ -99,21 +71,21 @@ impl BodyParsing {
 
         self.links.append(&mut self.references);
 
-        Note::new(
-            self.id,
-            self.aliases,
-            self.note_type,
-            self.tags,
-            self.links,
-            self.contents,
-            self.source_parents,
-            self.author,
-            self.line_num,
-            self.frontmatter_lines,
-            self.path,
+        Note {
+            id: self.id,
+            aliases: self.aliases,
+            note_type: self.note_type,
+            tags: self.tags,
+            links: self.links,
+            contents: self.contents,
+            source_parents: self.source_parents,
+            author: self.author,
+            lines: self.line_num,
+            frontmatter_lines: self.frontmatter_lines,
+            path: self.path,
             hash,
             modified
-        )
+        }
     }
 
     pub(crate) fn parse_lines(&mut self, rest: LinesIter) {
@@ -131,10 +103,10 @@ impl BodyParsing {
         self.line_num += 1;
     }
 
-    fn get_tags(&mut self, line: &String) {
+    fn get_tags(&mut self, line: &str) {
         static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"#([a-zA-Z\-]+)").unwrap());
 
-        for (_, [tag]) in RE.captures_iter(&line).map(|c| c.extract()) {
+        for (_, [tag]) in RE.captures_iter(line).map(|c| c.extract()) {
             self.tags.push(Ref::new(
                 RefNode::Note(self.id.to_string()),
                 RefNode::Tag(tag.to_string()),
@@ -144,11 +116,11 @@ impl BodyParsing {
         }
     }
 
-    fn get_links(&mut self, line: &String) {
+    fn get_links(&mut self, line: &str) {
         static RE: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(r"\[\[([^\|\]]+)\|?([^\|\]]*)\]\]").unwrap());
 
-        for (_, [to_id, title]) in RE.captures_iter(&line).map(|c| c.extract()) {
+        for (_, [to_id, title]) in RE.captures_iter(line).map(|c| c.extract()) {
             self.links.push(Ref::new(
                 RefNode::Note(self.id.to_string()),
                 RefNode::Note(to_id.to_string()),
@@ -171,10 +143,10 @@ impl BodyParsing {
         }
     }
 
-    fn get_reference_list(&mut self, line: &String) {
+    fn get_reference_list(&mut self, line: &str) {
         static RE_REF: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(r"\[([0-9]+)\]: (.+)").unwrap());
-        for (_, [ref_num, to_id]) in RE_REF.captures_iter(&line).map(|c| c.extract()) {
+        for (_, [ref_num, to_id]) in RE_REF.captures_iter(line).map(|c| c.extract()) {
             self.ref_list.push(Ref::new(
                 RefNode::Local(ref_num.parse().unwrap_or(0)),
                 RefNode::Note(to_id.to_string()),

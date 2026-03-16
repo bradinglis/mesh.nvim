@@ -1,9 +1,4 @@
-use duckdb::{
-    Connection, Error, params,
-    types::{FromSql, FromSqlError, OrderedMap},
-};
 use mlua::prelude::*;
-use std::path::Path;
 // const CACHE_FILE: &Path = Path::new("../.cache/mardown-db");
 
 #[mlua::lua_module]
@@ -32,11 +27,6 @@ pub struct Note {
     authors: Res,
     tags: Res,
     links: Res,
-}
-
-#[derive(Debug,Clone)]
-struct ListString {
-    values: Vec<String>,
 }
 
 #[derive(Debug,Clone)]
@@ -126,14 +116,14 @@ impl Res {
     }
 }
 
-impl FromSql for Res {
+impl duckdb::types::FromSql for Res {
     fn column_result(value: duckdb::types::ValueRef<'_>) -> duckdb::types::FromSqlResult<Self> {
         Res::from_value(value.to_owned())
     }
 }
 
 pub fn db_get() -> Result<Notes, duckdb::Error> {
-    let conn = Connection::open("/home/brad/.cache/markdown-db")?;
+    let conn = duckdb::Connection::open("/home/inglisb/.cache/markdown-db")?;
     let mut stmt = conn
         .prepare(r#"select
 notes.note_id,
@@ -167,7 +157,7 @@ group by notes.note_title,notes.note_id;
 
 
 pub fn db_get_backlinks(id: String) -> Result<Notes, duckdb::Error> {
-    let conn = Connection::open("/home/brad/.cache/markdown-db")?;
+    let conn = duckdb::Connection::open("/home/inglisb/.cache/markdown-db")?;
     let mut stmt = conn
         .prepare(r#"
 select

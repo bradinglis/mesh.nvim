@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::PathBuf, time::SystemTime};
 
-use duckdb::{AppenderParams, Connection, ToSql, params, params_from_iter};
+use duckdb::{Connection, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 
 use crate::{MyError, Result, note};
@@ -30,7 +30,7 @@ impl Reference {
                 line,
             })
         } else {
-            Err(MyError::OtherError)
+            Err(MyError::ParseError("link is weird".to_string()))
         }
     }
 }
@@ -60,7 +60,7 @@ impl Tag {
                 line,
             })
         } else {
-            Err(MyError::OtherError)
+            Err(MyError::ParseError("Tag is weird".to_string()))
         }
     }
 }
@@ -133,62 +133,192 @@ impl Author {
     }
 }
 
-#[derive(Serialize, Deserialize)]
 pub struct Db {
-    notes: Vec<Note>,
-    tags: Vec<Tag>,
-    references: Vec<Reference>,
-    parent: Vec<Parent>,
-    author: Vec<Author>,
-    content: Vec<Content>,
-    removing: Vec<String>,
+    pub(crate) connection: duckdb::Connection,
+    pub(crate) notes_path: PathBuf,
+    pub(crate) db_path: PathBuf,
 }
 
 impl Db {
-    pub fn init(removing: Vec<String>) -> Self {
-        Self {
-            notes: vec![],
-            parent: vec![],
-            author: vec![],
-            content: vec![],
-            tags: vec![],
-            references: vec![],
-            removing,
-        }
-    }
+    pub fn init(notes_dir: &std::path::Path, db_path: &std::path::Path) -> Result<Self> {
+        let db = Self {
+            connection: duckdb::Connection::open(db_path)?,
+            db_path: db_path.to_path_buf(),
+            notes_path: notes_dir.to_path_buf(),
+        };
 
-    pub fn from_notes(mut test: Vec<note::Note>, removing: Vec<String>) -> Result<Self> {
-        let mut db = Self::init(removing);
-        while let Some(mut n) = test.pop() {
-            while let Some(t) = n.tags.pop() {
-                db.tags.push(Tag::from_tag(t)?);
-            }
-            while let Some(r) = n.links.pop() {
-                db.references.push(Reference::from_link(r)?);
-            }
-            while let Some(c) = n.contents.pop() {
-                db.content.push(Content::from_content_line(c));
-            }
-            while let Some(parent) = n.source_parents.pop() {
-                db.parent.push(Parent::new(parent, n.id.clone()));
-            }
-            while let Some(author) = n.author.pop() {
-                db.author.push(Author::new(n.id.clone(), author));
-            }
-            db.notes.push(Note::from_note(n));
+        if db
+            .connection
+            .prepare("select path from metadata")
+            .and_then(|mut stmt| {
+                // Returns the path last used by the database (to
+                // handle different notes directories)
+                stmt.query_row([], |row| {
+                    let path: String = row.get(0)?;
+                    Ok(path)
+                })
+            })
+            .inspect_err(|x| eprint!("Error: {}", x))
+            .map_or(true, |x| x != notes_dir.to_str().unwrap_or(""))
+        // If we error or have a different path, recreate tables
+        {
+            println!("Creating DB tables: {}", db.db_path.to_string_lossy());
+            db.refresh()?;
         }
+
+        println!("DB all g brother");
         Ok(db)
     }
 
-    pub fn create_db(&self, conn: &Connection) -> Result<()> {
-        conn.execute("DROP TABLE if exists tags", [])?;
-        conn.execute("DROP TABLE if exists parents", [])?;
-        conn.execute("DROP TABLE if exists refs", [])?;
-        conn.execute("DROP TABLE if exists authors", [])?;
-        conn.execute("DROP TABLE if exists contents", [])?;
-        conn.execute("DROP TABLE if exists notes CASCADE", [])?;
+    pub fn update_notes(self, mut to_add: Vec<note::Note>, to_remove: Vec<String>) -> Result<()> {
+        let mut notes: Vec<Note> = vec![];
+        let mut tags: Vec<Tag> = vec![];
+        let mut references: Vec<Reference> = vec![];
+        let mut parent: Vec<Parent> = vec![];
+        let mut author: Vec<Author> = vec![];
+        let mut content: Vec<Content> = vec![];
 
-        conn.execute(
+        while let Some(mut n) = to_add.pop() {
+            while let Some(t) = n.tags.pop() {
+                tags.push(Tag::from_tag(t)?);
+            }
+            while let Some(r) = n.links.pop() {
+                references.push(Reference::from_link(r)?);
+            }
+            while let Some(c) = n.contents.pop() {
+                content.push(Content::from_content_line(c));
+            }
+            while let Some(p) = n.source_parents.pop() {
+                parent.push(Parent::new(p, n.id.clone()));
+            }
+            while let Some(a) = n.author.pop() {
+                author.push(Author::new(n.id.clone(), a));
+            }
+            notes.push(Note::from_note(n));
+        }
+
+        if !to_remove.is_empty() {
+            println!("deleting shit");
+            let placeholders: Vec<&str> = std::iter::repeat_n("?", to_remove.len()).collect();
+            self.connection.execute(
+                &format!("delete from tags where note_id in (select note_id from notes where path in ({}))", placeholders.join(", ")),
+                params_from_iter(&to_remove),
+            )?;
+
+            self.connection.execute(
+                &format!("delete from contents where note_id in (select note_id from notes where path in ({}))", placeholders.join(", ")),
+                params_from_iter(&to_remove),
+            )?;
+
+            self.connection.execute(
+                &format!("delete from authors where source in (select note_id from notes where path in ({}))", placeholders.join(", ")),
+                params_from_iter(&to_remove),
+            )?;
+
+            self.connection.execute(
+                &format!("delete from parents where child in (select note_id from notes where path in ({}))", placeholders.join(", ")),
+                params_from_iter(&to_remove),
+            )?;
+
+            self.connection.execute(
+                &format!("delete from refs where note_id in (select note_id from notes where path in ({}))", placeholders.join(", ")),
+                params_from_iter(&to_remove),
+            )?;
+
+            self.connection.execute(
+                &format!(
+                    "delete from notes where path in ({})",
+                    placeholders.join(", ")
+                ),
+                params_from_iter(&to_remove),
+            )?;
+        }
+
+        if !notes.is_empty() {
+            println!("adding shit");
+            let mut app_notes = self.connection.appender("notes")?;
+            let mut app_tags = self.connection.appender("tags")?;
+            let mut app_authors = self.connection.appender("authors")?;
+            let mut app_parents = self.connection.appender("parents")?;
+            let mut app_references = self.connection.appender("refs")?;
+            let mut app_contents = self.connection.appender("contents")?;
+
+            app_notes.append_rows(notes.into_iter().filter_map(|x| {
+                Some((
+                    x.id,
+                    x.alias,
+                    x.note_type,
+                    x.path,
+                    x.hash,
+                    x.modified.duration_since(SystemTime::UNIX_EPOCH).ok()?,
+                    x.frontmatter_lines,
+                    x.lines,
+                ))
+            }))?;
+
+            app_notes.flush()?;
+
+            app_authors.append_rows(author.into_iter().map(|x| (x.source, x.author)))?;
+
+            app_parents.append_rows(parent.into_iter().map(|x| (x.parent, x.child)))?;
+
+            app_references.append_rows(references.into_iter().map(|reference| {
+                (
+                    reference.note_id,
+                    reference.to_note,
+                    reference.loc,
+                    reference.line,
+                )
+            }))?;
+
+            app_tags.append_rows(
+                tags.into_iter()
+                    .map(|tag| (tag.tag, tag.note_id, tag.loc, tag.line)),
+            )?;
+
+            app_contents.append_rows(
+                content
+                    .into_iter()
+                    .map(|content| (content.note_id, content.line_num, content.text)),
+            )?;
+
+            app_authors.flush()?;
+            app_tags.flush()?;
+            app_references.flush()?;
+            app_parents.flush()?;
+            app_contents.flush()?;
+        };
+
+        Ok(())
+    }
+
+    pub fn refresh(&self) -> Result<()> {
+        self.connection.execute("DROP TABLE if exists tags", [])?;
+        self.connection
+            .execute("DROP TABLE if exists parents", [])?;
+        self.connection.execute("DROP TABLE if exists refs", [])?;
+        self.connection
+            .execute("DROP TABLE if exists authors", [])?;
+        self.connection
+            .execute("DROP TABLE if exists contents", [])?;
+        self.connection
+            .execute("DROP TABLE if exists notes CASCADE", [])?;
+        self.connection
+            .execute("DROP TABLE if exists metadata", [])?;
+
+        self.connection.execute(
+            "CREATE OR REPLACE TABLE metadata (
+            path TEXT PRIMARY KEY NOT NULL,
+        )",
+            [], // empty list of parameters
+        )?;
+
+        self.connection.execute(
+            "insert into metadata values (?)",
+            [self.notes_path.to_str().unwrap_or("").to_string()], // empty list of parameters
+        )?;
+
+        self.connection.execute(
             "CREATE OR REPLACE TABLE notes (
             note_id TEXT PRIMARY KEY NOT NULL,
             note_title TEXT NULL,
@@ -202,7 +332,7 @@ impl Db {
             [], // empty list of parameters
         )?;
 
-        conn.execute(
+        self.connection.execute(
             "CREATE OR REPLACE TABLE tags (
             tag TEXT NOT NULL,
             note_id TEXT NOT NULL,
@@ -213,18 +343,18 @@ impl Db {
             [], // empty list of parameters
         )?;
 
-        conn.execute(
+        self.connection.execute(
             "CREATE OR REPLACE TABLE authors (
             source TEXT NOT NULL,
             author TEXT NOT NULL,
             CONSTRAINT fk_Source FOREIGN KEY (source) REFERENCES notes(note_id),
-            CONSTRAINT fk_Author FOREIGN KEY (author) REFERENCES notes(note_id),
             PRIMARY KEY (source, author)
         )",
             [], // empty list of parameters
         )?;
+        // CONSTRAINT fk_Author FOREIGN KEY (author) REFERENCES notes(note_id),
 
-        conn.execute(
+        self.connection.execute(
             "CREATE OR REPLACE TABLE parents (
             parent TEXT NOT NULL,
             child TEXT NOT NULL,
@@ -235,7 +365,7 @@ impl Db {
         )?;
         // CONSTRAINT fk_Parent FOREIGN KEY (parent) REFERENCES notes(note_id),
 
-        conn.execute(
+        self.connection.execute(
             "CREATE OR REPLACE TABLE refs (
             note_id TEXT NOT NULL,
             to_id TEXT NOT NULL,
@@ -247,7 +377,7 @@ impl Db {
         )?;
         // CONSTRAINT fk_ToNote FOREIGN KEY (to_id) REFERENCES notes(id)
 
-        conn.execute(
+        self.connection.execute(
             "CREATE OR REPLACE TABLE contents (
             note_id TEXT NOT NULL,
             line UINTEGER NOT NULL,
@@ -261,108 +391,17 @@ impl Db {
         Ok(())
     }
 
-    pub fn commit_db(mut self, conn: Connection) -> Result<()> {
+    pub fn get_hashes(&self) -> Result<HashMap<String, u64>> {
+        let mut map = HashMap::new();
+        let mut stmt = self.connection.prepare("select path, hash from notes")?;
 
-        let placeholders: Vec<&str> = std::iter::repeat_n("?", self.removing.len()).collect();
+        let mut x = stmt.query([])?;
 
-        conn.execute(
-                &format!("delete from tags where note_id in (select note_id from notes where path in ({}))", placeholders.join(", ")),
-                params_from_iter(&self.removing),
-            )?;
+        while let Some(y) = x.next()? {
+            map.insert(y.get(0)?, y.get(1)?);
+        }
 
-        conn.execute(
-                &format!("delete from contents where note_id in (select note_id from notes where path in ({}))", placeholders.join(", ")),
-                params_from_iter(&self.removing),
-            )?;
 
-        conn.execute(
-                &format!("delete from authors where source in (select note_id from notes where path in ({}))", placeholders.join(", ")),
-                params_from_iter(&self.removing),
-            )?;
-
-        conn.execute(
-                &format!("delete from parents where child in (select note_id from notes where path in ({}))", placeholders.join(", ")),
-                params_from_iter(&self.removing),
-            )?;
-
-        conn.execute(
-                &format!("delete from refs where note_id in (select note_id from notes where path in ({}))", placeholders.join(", ")),
-                params_from_iter(&self.removing),
-            )?;
-
-        conn.execute(
-                &format!("delete from notes where path in ({})", placeholders.join(", ")),
-                params_from_iter(&self.removing),
-            )?;
-
-        // let mut rows = stmt.query(params_from_iter(self.removing))?;
-
-        let mut app_notes = conn.appender("notes")?;
-        let mut app_tags = conn.appender("tags")?;
-        let mut app_authors = conn.appender("authors")?;
-        let mut app_parents = conn.appender("parents")?;
-        let mut app_references = conn.appender("refs")?;
-        let mut app_contents = conn.appender("contents")?;
-
-        app_notes.append_rows(self.notes.into_iter().filter_map(|x| {
-            Some((
-                x.id,
-                x.alias,
-                x.note_type,
-                x.path,
-                x.hash,
-                x.modified.duration_since(SystemTime::UNIX_EPOCH).ok()?,
-                x.frontmatter_lines,
-                x.lines,
-            ))
-        }))?;
-
-        app_notes.flush()?;
-
-        app_authors.append_rows(self.author.into_iter().map(|x| (x.source, x.author)))?;
-
-        app_parents.append_rows(self.parent.into_iter().map(|x| (x.parent, x.child)))?;
-
-        app_references.append_rows(self.references.into_iter().map(|reference| {
-            (
-                reference.note_id,
-                reference.to_note,
-                reference.loc,
-                reference.line,
-            )
-        }))?;
-
-        app_tags.append_rows(
-            self.tags
-                .into_iter()
-                .map(|tag| (tag.tag, tag.note_id, tag.loc, tag.line)),
-        )?;
-
-        app_contents.append_rows(
-            self.content
-                .into_iter()
-                .map(|content| (content.note_id, content.line_num, content.text)),
-        )?;
-
-        app_authors.flush()?;
-        app_tags.flush()?;
-        app_references.flush()?;
-        app_parents.flush()?;
-        app_contents.flush()?;
-
-        Ok(())
+        Ok(map)
     }
 }
-
-// fn tags(test: Vec<note::Note>) -> HashMap<String, Vec<note::Ref>> {
-//     let grouped: HashMap<String, Vec<note::Ref>> =
-//         test.into_iter().fold(HashMap::new(), |mut acc, val| {
-//             val.tags.into_iter().for_each(|tag| {
-//                 if let Ok(x) = tag.get_tag() {
-//                     acc.entry(x).or_default().push(tag);
-//                 }
-//             });
-//             acc
-//         });
-//     grouped
-// }

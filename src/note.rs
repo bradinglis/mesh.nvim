@@ -1,7 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::fmt::Display;
+use std::path::PathBuf;
 use std::time::SystemTime;
 
-use crate::output;
 use crate::{MyError, Result};
 use serde::{Deserialize, Serialize};
 
@@ -55,83 +55,20 @@ impl NoteType {
             _ => Err(MyError::ParseError("note type unknown".to_string())),
         }
     }
+}
 
-    pub fn to_string(self) -> String {
-        match self {
+impl Display for NoteType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let x =match self {
             NoteType::Source => "source".to_string(),
             NoteType::Author => "author".to_string(),
             NoteType::Note => "note".to_string(),
-        }
-    }
+        };
 
-
-}
-
-impl Note {
-    pub(crate) fn new(
-        id: String,
-        aliases: Option<String>,
-        note_type: NoteType,
-        tags: Vec<Ref>,
-        links: Vec<Ref>,
-        contents: Vec<ContentLine>,
-        source_parents: Vec<String>,
-        author: Vec<String>,
-        lines: usize,
-        frontmatter_lines: usize,
-        path: PathBuf,
-        hash: u64,
-        modified: SystemTime,
-    ) -> Self {
-        Self {
-            id,
-            aliases,
-            note_type,
-            tags,
-            links,
-            contents,
-            source_parents,
-            author,
-            lines,
-            frontmatter_lines,
-            path,
-            hash,
-            modified
-        }
-    }
-
-    fn to_output(self) -> output::Note {
-        let note_type = match self.note_type {
-            NoteType::Source => "source",
-            NoteType::Author => "author",
-            NoteType::Note => "note",
-        }
-        .to_string();
-
-        let tags = self
-            .tags
-            .iter()
-            .map(|x| x.clone().to_output_name())
-            .collect();
-        let links = self
-            .links
-            .iter()
-            .map(|x| x.clone().to_output_name())
-            .collect();
-
-        output::Note {
-            id: self.id,
-            aliases: self.aliases,
-            note_type,
-            tags,
-            links,
-            source_parents: self.source_parents,
-            author: self.author,
-            lines: self.lines,
-            frontmatter_lines: self.frontmatter_lines,
-        }
+        f.write_fmt(format_args!("{}", x))
     }
 }
+
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Ref {
@@ -164,53 +101,12 @@ impl Ref {
         }
     }
 
-    pub(crate) fn get_tag(&self) -> Result<String> {
-        if let RefNode::Tag(x) = &self.to {
-            Ok(x.clone())
-        } else {
-            Err(MyError::OtherError)
-        }
-    }
-
-    pub(crate) fn instantiate_intext(mut self, ref_list: &Vec<Ref>) -> Self {
+    pub(crate) fn instantiate_intext(mut self, ref_list: &[Ref]) -> Self {
         self.to = match self.to {
             RefNode::Local(y) => ref_list[y].to.clone(),
             z => z,
         };
         self
-    }
-
-    fn to_output_name(&self) -> String {
-        match self.to.clone() {
-            RefNode::Note(y) => y,
-            RefNode::Tag(y) => y,
-            RefNode::Local(_) => "".to_string(),
-        }
-    }
-
-    fn to_output_struct(self) -> output::Ref {
-        let (ref_type, to) = match self.to {
-            RefNode::Note(x) => ("note".to_string(), x),
-            RefNode::Tag(x) => ("tag".to_string(), x),
-            RefNode::Local(x) => ("local".to_string(), x.to_string()),
-        };
-        let from = match self.from {
-            RefNode::Note(x) => x,
-            RefNode::Tag(x) => x,
-            RefNode::Local(x) => x.to_string(),
-        };
-        let line = match self.loc {
-            RefLoc::FrontMatter => 0,
-            RefLoc::Body(x) => x,
-        };
-
-        output::Ref {
-            from,
-            to,
-            ref_type,
-            line,
-            alias: self.alias,
-        }
     }
 
     pub fn key(&self) -> usize {

@@ -26,7 +26,7 @@ impl FoldRest for LinesIter {
     where
         F: FnMut(Self::Item) -> Result<IterState>,
     {
-        while let Some(x) = self.next() {
+        for x in self.by_ref() {
             let t = f(x)?;
             match t {
                 IterState::Break => {

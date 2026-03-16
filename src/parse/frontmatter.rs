@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::path::Path;
 use std::str::SplitWhitespace;
 
@@ -22,7 +21,7 @@ pub(crate) struct FrontMatterParsing {
 
 impl FrontMatterParsing {
     pub fn parse(path: &Path, iter: LinesIter) -> Result<InterimNote> {
-        let mut new = Self::new(path);
+        let mut new = Self::new();
 
         let mut line_num: usize = 0;
         let rest = iter.for_each_rest(|x| {
@@ -37,20 +36,22 @@ impl FrontMatterParsing {
             }
         })?;
 
-        let id = new.id.ok_or(MyError::ParseError("id not correct".to_string()))?;
-        let note_type = new.note_type.ok_or(MyError::OtherError)?;
-        Ok(InterimNote::new(
+        let id = new
+            .id
+            .ok_or(MyError::ParseError("id not correct".to_string()))?;
+        let note_type = new.note_type.unwrap_or("".to_string());
+        Ok(InterimNote {
             id,
-            new.aliases,
-            NoteType::from_string(note_type)?,
-            new.tags,
-            new.references,
-            new.source_parents,
-            new.author,
-            line_num,
-            Some(rest),
-            path.to_path_buf(),
-        ))
+            aliases: new.aliases,
+            note_type: NoteType::from_string(note_type)?,
+            tags: new.tags,
+            references: new.references,
+            source_parents: new.source_parents,
+            author: new.author,
+            rest: Some(rest),
+            frontmatter_lines: line_num,
+            path: path.to_path_buf(),
+        })
     }
 
     fn add_line_to_frontmatter(&mut self, line: String) -> Result<()> {
@@ -62,17 +63,24 @@ impl FrontMatterParsing {
             Some(("author", suff)) => self.add_authors(suff),
             Some(("references", suff)) => self.add_references(suff),
             Some(("tags", suff)) => self.add_tags(suff),
-            _ => Err(MyError::OtherError)?,
+            Some((x, y)) => Err(MyError::ParseError(format!("Unknown field: {x}: {y}")))?,
+            None => Err(MyError::ParseError("Unknown field".to_string()))?,
         };
         Ok(())
     }
 
     fn add_source_parents(&mut self, text: &str) {
-        if let Some(parents) = Self::get_text_list(text).map(|iter| iter.map(|parent| parent.to_string()).collect()) { self.source_parents = parents }
+        if let Some(parents) =
+            Self::get_text_list(text).map(|iter| iter.map(|parent| parent.to_string()).collect())
+        {
+            self.source_parents = parents
+        }
     }
 
     fn add_authors(&mut self, text: &str) {
-        if let Some(authors) = Self::get_text_list(text).map(|iter| iter.map(|author| author.to_string()).collect()) {
+        if let Some(authors) =
+            Self::get_text_list(text).map(|iter| iter.map(|author| author.to_string()).collect())
+        {
             self.author = authors
         }
     }
@@ -88,7 +96,9 @@ impl FrontMatterParsing {
                 )
             })
             .collect()
-        }) { self.tags = tags }
+        }) {
+            self.tags = tags
+        }
     }
 
     fn add_references(&mut self, text: &str) {
@@ -102,7 +112,9 @@ impl FrontMatterParsing {
                 )
             })
             .collect()
-        }) { self.references = references }
+        }) {
+            self.references = references
+        }
     }
 
     fn get_text_list(text: &str) -> Option<SplitWhitespace<'_>> {
@@ -112,7 +124,7 @@ impl FrontMatterParsing {
         }
     }
 
-    fn new(path: &Path) -> Self {
+    fn new() -> Self {
         Self {
             id: None,
             aliases: None,
@@ -124,4 +136,3 @@ impl FrontMatterParsing {
         }
     }
 }
-
