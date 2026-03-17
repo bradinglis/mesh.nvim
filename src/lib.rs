@@ -1,76 +1,151 @@
-use mlua::prelude::*;
+pub(crate) mod db;
+pub(crate) mod file;
+pub(crate) mod fold_rest;
+pub(crate) mod note;
+pub(crate) mod parse;
+
+use db::DbValue;
+pub use mlua::prelude::*;
+use std::{fmt::Debug, path::Path};
+use thiserror::Error;
 // const CACHE_FILE: &Path = Path::new("../.cache/mardown-db");
+
+pub type Result<T> = std::result::Result<T, MyError>;
+
+#[derive(Error, Debug)]
+pub enum MyError {
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("DuckDB error: {0}")]
+    DuckDb(#[from] duckdb::Error),
+    #[error("Json error: {0}")]
+    Json(#[from] serde_json::Error),
+    #[error("File error: {0}")]
+    FileError(String),
+    #[error("Parse error: {0}")]
+    ParseError(String),
+    #[error("A custom error occurred")]
+    OtherError,
+}
+
+pub trait MyResult {
+    fn i(self) -> Self;
+}
+
+impl<T> MyResult for Result<T> {
+    fn i(self) -> Self {
+        match self {
+            Err(y) => {
+                eprintln!("Error: {}", y);
+                Err(y)
+            }
+            x => x,
+        }
+    }
+}
 
 #[mlua::lua_module]
 fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
     let exports = lua.create_table()?;
     exports.set(
+        "update_files",
+        lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
+            lua_do(lua, db_file, notes_dir, |db| {
+                db.process_files()?;
+                Ok(LuaNil)
+            })
+        })?,
+    )?;
+    exports.set(
         "get_notes",
-        lua.create_function(|lua, (): ()| get_notes(lua))?,
+        lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
+            lua_do(lua, db_file, notes_dir, |db| db.get_notes())
+        })?,
     )?;
     exports.set(
         "get_backlinks",
-        lua.create_function(|lua, id: String | get_backlinks(lua, id))?,
+        lua.create_function(
+            |lua, (notes_dir, db_file, note): (String, String, String)| {
+                lua_do(lua, db_file, notes_dir, |db| db.get_backlinks(note))
+            },
+        )?,
+    )?;
+
+    exports.set(
+        "get_backlinks",
+        lua.create_function(
+            |lua, (notes_dir, db_file): (String, String)| {
+                lua_do(lua, db_file, notes_dir, |db| db.get_tag_list())
+            },
+        )?,
     )?;
     Ok(exports)
 }
 
-#[derive(Debug,Clone)]
-pub struct Notes {
-    v: Vec<Note>,
+pub fn lua_do<F, T: IntoLua>(
+    lua: &Lua,
+    db_path: String,
+    notes_dir: String,
+    f: F,
+) -> LuaResult<LuaValue>
+where
+    F: FnOnce(db::Db) -> Result<T>,
+{
+    db::Db::init(Path::new(&notes_dir), Path::new(&db_path))
+        .and_then(f)
+        .into_lua_err()?
+        .into_lua(lua)
 }
 
-#[derive(Debug,Clone)]
-pub struct Note {
-    id: Res,
-    title: Res,
-    authors: Res,
-    tags: Res,
-    links: Res,
+pub fn bin_do<F, T: Debug>(db_path: String, notes_dir: String, f: F) -> Result<T>
+where
+    F: FnOnce(db::Db) -> Result<T>,
+{
+    db::Db::init(Path::new(&notes_dir), Path::new(&db_path)).and_then(f)
 }
 
-#[derive(Debug,Clone)]
-enum Res {
-    List(Vec<Res>),
-    Table(Vec<(String, Res)>),
-    String(String),
-    None,
-}
-
-fn get_notes(lua: &Lua) -> LuaResult<LuaValue> {
-    let x = db_get().into_lua_err()?;
-    x.into_lua(lua)
-}
-
-fn get_backlinks(lua: &Lua, id: String) -> LuaResult<LuaValue> {
-    let x = db_get_backlinks(id).into_lua_err()?;
-    x.into_lua(lua)
-}
-
-impl IntoLua for Res {
+impl IntoLua for db::DbValue {
     fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
         Ok(match self {
-            Res::List(items) => {
+            DbValue::List(items) => {
                 let t = lua.create_table()?;
                 for (i, x) in items.into_iter().enumerate() {
-                    if let Res::None = x {
+                    if let DbValue::None = x {
                     } else {
                         t.set(i + 1, x)?
                     }
                 }
                 LuaValue::Table(t)
             }
-            Res::Table(items) => {
+            DbValue::Table(items) => {
                 let t = lua.create_table()?;
                 for (k, v) in items.into_iter() {
                     t.set(k, v)?
                 }
                 LuaValue::Table(t)
             }
-            Res::String(x) => x.into_lua(lua)?,
-            Res::None => LuaValue::Nil,
+            DbValue::String(x) => x.into_lua(lua)?,
+            DbValue::Int(x) => LuaValue::Integer(x),
+            DbValue::Float(x) => LuaValue::Number(x),
+            DbValue::Bool(x) => LuaValue::Boolean(x),
+            DbValue::None => LuaValue::Nil,
         })
     }
+}
+
+// May use for picker simplicity
+#[derive(Debug, Clone)]
+pub struct Notes {
+    v: Vec<Note>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Note {
+    id: DbValue,
+    title: DbValue,
+    authors: DbValue,
+    tags: DbValue,
+    links: DbValue,
 }
 
 impl IntoLua for Notes {
@@ -95,98 +170,4 @@ impl IntoLua for Note {
     }
 }
 
-impl Res {
-    fn from_value(value: duckdb::types::Value) -> duckdb::types::FromSqlResult<Self> {
-        Ok(match value {
-            duckdb::types::Value::Text(x) | duckdb::types::Value::Enum(x) => Res::String(x),
-            duckdb::types::Value::List(values) | duckdb::types::Value::Array(values) => Res::List(
-                values
-                    .into_iter()
-                    .filter_map(|v| Res::from_value(v).ok())
-                    .collect(),
-            ),
-            duckdb::types::Value::Struct(ordered_map) => Res::Table({
-                ordered_map
-                    .iter()
-                    .filter_map(|(x, y)| Some((x.to_owned(), Res::from_value(y.to_owned()).ok()?)))
-                    .collect()
-            }),
-            _ => Res::None,
-        })
-    }
-}
 
-impl duckdb::types::FromSql for Res {
-    fn column_result(value: duckdb::types::ValueRef<'_>) -> duckdb::types::FromSqlResult<Self> {
-        Res::from_value(value.to_owned())
-    }
-}
-
-pub fn db_get() -> Result<Notes, duckdb::Error> {
-    let conn = duckdb::Connection::open("/home/inglisb/.cache/markdown-db")?;
-    let mut stmt = conn
-        .prepare(r#"select
-notes.note_id,
-notes.note_title,
-list(distinct { 'id': tags.tag, 'line': tags.line }) as tags,
-list(distinct { 'id': author_notes.note_id, 'name': author_notes.note_title }) as authors,
-list(distinct { 'id': refs.to_id, 'line': refs.line}) as links,
-from notes 
-left join tags on notes.note_id = tags.note_id
-left join authors on notes.note_id = authors.source
-left join notes as author_notes on authors.author = author_notes.note_id
-left join refs on notes.note_id = refs.note_id
-full join parents on notes.note_id = parents.parent
-group by notes.note_title,notes.note_id;
-"#)?;
-
-    let rows = stmt.query_map([], |x| {
-        Ok(Note {
-            id: x.get(0)?,
-            title: x.get(1)?,
-            tags: x.get(2)?,
-            authors: x.get(3)?,
-            links: x.get(4)?,
-        })
-    })?;
-
-    let x: Vec<Note> = rows.map(|x| x.expect("Failed to map")).collect();
-
-    Ok(Notes { v: x })
-}
-
-
-pub fn db_get_backlinks(id: String) -> Result<Notes, duckdb::Error> {
-    let conn = duckdb::Connection::open("/home/inglisb/.cache/markdown-db")?;
-    let mut stmt = conn
-        .prepare(r#"
-select
-notes.note_id,
-notes.note_title,
-list(distinct { 'id': tags.tag, 'line': tags.line }) as tags,
-list(distinct { 'id': author_notes.note_id, 'name': author_notes.note_title }) as authors,
-list(distinct { 'id': refs.to_id, 'line': refs.line}) as links,
-from notes
-left join tags on notes.note_id = tags.note_id
-left join authors on notes.note_id = authors.source
-left join notes as author_notes on authors.author = author_notes.note_id
-left join refs on notes.note_id = refs.note_id
-full join parents on notes.note_id = parents.parent
-where notes.note_id in (select note_id from refs where to_id = ?)
-group by notes.note_title,notes.note_id;
-"#)?;
-
-    let rows = stmt.query_map([id], |x| {
-        Ok(Note {
-            id: x.get(0)?,
-            title: x.get(1)?,
-            tags: x.get(2)?,
-            authors: x.get(3)?,
-            links: x.get(4)?,
-        })
-    })?;
-
-    let x: Vec<Note> = rows.map(|x| x.expect("Failed to map")).collect();
-
-    Ok(Notes { v: x })
-}

@@ -1,9 +1,9 @@
 use std::{collections::HashMap, path::PathBuf, time::SystemTime};
 
-use duckdb::{Connection, params, params_from_iter};
+use duckdb::{Connection, Params, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 
-use crate::{MyError, Result, note};
+use crate::{MyError, Result, file::Paths, note};
 
 #[derive(Serialize, Deserialize)]
 pub struct Reference {
@@ -133,6 +133,72 @@ impl Author {
     }
 }
 
+#[derive(Debug, Clone)]
+pub enum DbValue {
+    List(Vec<DbValue>),
+    Table(Vec<(String, DbValue)>),
+    String(String),
+    Int(i64),
+    Float(f64),
+    Bool(bool),
+    None,
+}
+
+impl duckdb::types::FromSql for DbValue {
+    fn column_result(value: duckdb::types::ValueRef<'_>) -> duckdb::types::FromSqlResult<Self> {
+        DbValue::from_value(value.to_owned())
+    }
+}
+
+impl DbValue {
+    fn make_table(list: Vec<(&str, DbValue)>) -> DbValue {
+        DbValue::Table(list.into_iter().map(|(x, y)| (x.to_string(), y)).collect())
+    }
+
+    fn from_value(value: duckdb::types::Value) -> duckdb::types::FromSqlResult<Self> {
+        Ok(match value {
+            duckdb::types::Value::Text(x) | duckdb::types::Value::Enum(x) => DbValue::String(x),
+            duckdb::types::Value::List(values) | duckdb::types::Value::Array(values) => {
+                DbValue::List(
+                    values
+                        .into_iter()
+                        .filter_map(|v| DbValue::from_value(v).ok())
+                        .collect(),
+                )
+            }
+            duckdb::types::Value::Struct(ordered_map) => DbValue::Table({
+                ordered_map
+                    .iter()
+                    .filter_map(|(x, y)| {
+                        Some((x.to_owned(), DbValue::from_value(y.to_owned()).ok()?))
+                    })
+                    .collect()
+            }),
+            duckdb::types::Value::HugeInt(x) => DbValue::Int(x.try_into().unwrap()),
+            duckdb::types::Value::BigInt(x) => DbValue::Int(x),
+            duckdb::types::Value::UTinyInt(x) => DbValue::Int(x.into()),
+            duckdb::types::Value::SmallInt(x) => DbValue::Int(x.into()),
+            duckdb::types::Value::Int(x) => DbValue::Int(x.into()),
+            duckdb::types::Value::TinyInt(x) => DbValue::Int(x.into()),
+
+            duckdb::types::Value::USmallInt(x) => DbValue::Int(x.into()),
+
+            duckdb::types::Value::UInt(x) => DbValue::Int(x.into()),
+
+            duckdb::types::Value::UBigInt(x) => DbValue::Int(x.try_into().unwrap()),
+
+            duckdb::types::Value::Boolean(x) => DbValue::Bool(x),
+            duckdb::types::Value::Float(x) => DbValue::Float(x.into()),
+            duckdb::types::Value::Double(x) => DbValue::Float(x),
+            // duckdb::types::Value::Timestamp(time_unit, _) => todo!(),
+            // duckdb::types::Value::Blob(items) => todo!(),
+            // duckdb::types::Value::Date32(_) => todo!(),
+            // duckdb::types::Value::Time64(time_unit, _) => todo!(),
+            _ => DbValue::None,
+        })
+    }
+}
+
 pub struct Db {
     pub(crate) connection: duckdb::Connection,
     pub(crate) notes_path: PathBuf,
@@ -163,14 +229,19 @@ impl Db {
         // If we error or have a different path, recreate tables
         {
             println!("Creating DB tables: {}", db.db_path.to_string_lossy());
-            db.refresh()?;
+            db.clear()?;
         }
 
         println!("DB all g brother");
         Ok(db)
     }
 
-    pub fn update_notes(self, mut to_add: Vec<note::Note>, to_remove: Vec<String>) -> Result<()> {
+    pub fn process_files(&self) -> Result<()> {
+        let (to_remove, to_add) = Paths::go(self)?;
+        self.update_notes(to_add, to_remove)
+    }
+
+    fn update_notes(&self, mut to_add: Vec<note::Note>, to_remove: Vec<String>) -> Result<()> {
         let mut notes: Vec<Note> = vec![];
         let mut tags: Vec<Tag> = vec![];
         let mut references: Vec<Reference> = vec![];
@@ -198,7 +269,6 @@ impl Db {
         }
 
         if !to_remove.is_empty() {
-            println!("deleting shit");
             let placeholders: Vec<&str> = std::iter::repeat_n("?", to_remove.len()).collect();
             self.connection.execute(
                 &format!("delete from tags where note_id in (select note_id from notes where path in ({}))", placeholders.join(", ")),
@@ -292,102 +362,13 @@ impl Db {
         Ok(())
     }
 
-    pub fn refresh(&self) -> Result<()> {
-        self.connection.execute("DROP TABLE if exists tags", [])?;
+    pub fn clear(&self) -> Result<()> {
         self.connection
-            .execute("DROP TABLE if exists parents", [])?;
-        self.connection.execute("DROP TABLE if exists refs", [])?;
-        self.connection
-            .execute("DROP TABLE if exists authors", [])?;
-        self.connection
-            .execute("DROP TABLE if exists contents", [])?;
-        self.connection
-            .execute("DROP TABLE if exists notes CASCADE", [])?;
-        self.connection
-            .execute("DROP TABLE if exists metadata", [])?;
-
-        self.connection.execute(
-            "CREATE OR REPLACE TABLE metadata (
-            path TEXT PRIMARY KEY NOT NULL,
-        )",
-            [], // empty list of parameters
-        )?;
-
+            .execute_batch(include_str!("../sql/clear.sql"))?;
         self.connection.execute(
             "insert into metadata values (?)",
             [self.notes_path.to_str().unwrap_or("").to_string()], // empty list of parameters
         )?;
-
-        self.connection.execute(
-            "CREATE OR REPLACE TABLE notes (
-            note_id TEXT PRIMARY KEY NOT NULL,
-            note_title TEXT NULL,
-            note_type TEXT NOT NULL,
-            path TEXT NOT NULL,
-            hash UBIGINT NOT NULL,
-            modified TIMESTAMP NOT NULL,
-            frontmatterlines INTEGER NOT NULL,
-            lines INTEGER NOT NULL,
-        )",
-            [], // empty list of parameters
-        )?;
-
-        self.connection.execute(
-            "CREATE OR REPLACE TABLE tags (
-            tag TEXT NOT NULL,
-            note_id TEXT NOT NULL,
-            loc TEXT NOT NULL,
-            line UINTEGER NULL,
-            CONSTRAINT fk_Note FOREIGN KEY (note_id) REFERENCES notes(note_id)
-        )",
-            [], // empty list of parameters
-        )?;
-
-        self.connection.execute(
-            "CREATE OR REPLACE TABLE authors (
-            source TEXT NOT NULL,
-            author TEXT NOT NULL,
-            CONSTRAINT fk_Source FOREIGN KEY (source) REFERENCES notes(note_id),
-            PRIMARY KEY (source, author)
-        )",
-            [], // empty list of parameters
-        )?;
-        // CONSTRAINT fk_Author FOREIGN KEY (author) REFERENCES notes(note_id),
-
-        self.connection.execute(
-            "CREATE OR REPLACE TABLE parents (
-            parent TEXT NOT NULL,
-            child TEXT NOT NULL,
-            CONSTRAINT fk_Child FOREIGN KEY (child) REFERENCES notes(note_id),
-            PRIMARY KEY (parent, child)
-        )",
-            [], // empty list of parameters
-        )?;
-        // CONSTRAINT fk_Parent FOREIGN KEY (parent) REFERENCES notes(note_id),
-
-        self.connection.execute(
-            "CREATE OR REPLACE TABLE refs (
-            note_id TEXT NOT NULL,
-            to_id TEXT NOT NULL,
-            loc TEXT NOT NULL,
-            line UINTEGER NULL,
-            CONSTRAINT fk_FromNote FOREIGN KEY (note_id) REFERENCES notes(note_id)
-        )",
-            [], // empty list of parameters
-        )?;
-        // CONSTRAINT fk_ToNote FOREIGN KEY (to_id) REFERENCES notes(id)
-
-        self.connection.execute(
-            "CREATE OR REPLACE TABLE contents (
-            note_id TEXT NOT NULL,
-            line UINTEGER NOT NULL,
-            text TEXT NOT NULL,
-            CONSTRAINT fk_Note FOREIGN KEY (note_id) REFERENCES notes(note_id),
-            PRIMARY KEY (note_id, line)
-        )",
-            [], // empty list of parameters
-        )?;
-
         Ok(())
     }
 
@@ -401,7 +382,169 @@ impl Db {
             map.insert(y.get(0)?, y.get(1)?);
         }
 
-
         Ok(map)
+    }
+
+    pub fn get_tag_notes(&self, tag: String) -> Result<DbValue> {
+        let conn = duckdb::Connection::open("/home/inglisb/.cache/markdown-db")?;
+        let mut stmt = conn.prepare(
+            r#"
+select
+notes.note_id,
+notes.note_title,
+list(distinct { 'id': tags.tag, 'line': tags.line }) as tags,
+list(distinct { 'id': author_notes.note_id, 'name': author_notes.note_title }) as authors,
+list(distinct { 'id': refs.to_id, 'line': refs.line}) as links,
+any_value(notes.note_type),
+from notes
+left join tags on notes.note_id = tags.note_id
+left join authors on notes.note_id = authors.source
+left join notes as author_notes on authors.author = author_notes.note_id
+left join refs on notes.note_id = refs.note_id
+full join parents on notes.note_id = parents.parent
+where notes.note_id in (select note_id from tags where tag = ?)
+group by notes.note_title,notes.note_id;
+"#,
+        )?;
+
+        let mut res: Vec<DbValue> = vec![];
+        let mut rows = stmt.query([tag])?;
+        while let Some(row) = rows.next()? {
+            res.push(DbValue::make_table(vec![
+                ("id", row.get(0)?),
+                ("title", row.get(1)?),
+                ("tags", row.get(2)?),
+                ("authors", row.get(3)?),
+                ("links", row.get(4)?),
+                ("type", row.get(5)?),
+            ]));
+        }
+
+        Ok(DbValue::List(res))
+    }
+
+    pub fn get_backlinks(&self, id: String) -> Result<DbValue> {
+        self.run_and_return_list(
+            r#"
+select
+notes.note_id,
+notes.note_title,
+list(distinct { 'id': tags.tag, 'line': tags.line }) as tags,
+list(distinct { 'id': author_notes.note_id, 'name': author_notes.note_title }) as authors,
+list(distinct { 'id': refs.to_id, 'line': refs.line}) as links,
+any_value(notes.note_type),
+from notes
+left join tags on notes.note_id = tags.note_id
+left join authors on notes.note_id = authors.source
+left join notes as author_notes on authors.author = author_notes.note_id
+left join refs on notes.note_id = refs.note_id
+full join parents on notes.note_id = parents.parent
+where notes.note_id in (select note_id from refs where to_id = ?)
+group by notes.note_title,notes.note_id;
+"#,
+            [id],
+        )
+    }
+
+    pub fn run_and_return_list<P: Params>(&self, sql: &str, params: P) -> Result<DbValue> {
+        let mut stmt = self.connection.prepare(sql)?;
+
+        let mut res: Vec<DbValue> = vec![];
+        let mut rows = stmt.query(params)?;
+        let column_names = rows.as_ref().unwrap().column_names();
+
+        while let Some(row) = rows.next()? {
+            res.push(DbValue::Table(
+                column_names
+                    .clone()
+                    .into_iter()
+                    .enumerate()
+                    .map(|(x, name)| (name, row.get(x).unwrap()))
+                    .collect(),
+            ));
+        }
+
+        Ok(DbValue::List(res))
+    }
+
+    pub fn run_and_return_table<P: Params>(self, sql: &str, params: P) -> Result<DbValue> {
+        let mut stmt = self.connection.prepare(sql)?;
+
+        let mut res: Vec<(String, DbValue)> = vec![];
+        let mut rows = stmt.query(params)?;
+        let column_names = rows.as_ref().unwrap().column_names();
+
+        while let Some(row) = rows.next()? {
+            res.push((
+                row.get(0)?,
+                DbValue::Table(
+                    column_names
+                        .clone()
+                        .into_iter()
+                        .enumerate()
+                        .map(|(x, name)| (name, row.get(x).unwrap()))
+                        .collect(),
+                ),
+            ));
+        }
+
+        Ok(DbValue::Table(res))
+    }
+
+    pub fn get_tag_list(&self) -> Result<DbValue> {
+        let mut stmt = self.connection.prepare(
+            r#"select
+tag,
+count(distinct tags.note_id) as count
+from tags 
+group by tags.tag
+"#,
+        )?;
+
+        let mut res: Vec<DbValue> = vec![];
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            res.push(DbValue::make_table(vec![
+                ("tag", row.get(0)?),
+                ("count", row.get(1)?),
+            ]));
+        }
+
+        Ok(DbValue::List(res))
+    }
+
+    pub fn get_notes(&self) -> Result<DbValue> {
+        // TODO: use include_str! for sql from ../sql folder
+        let mut stmt = self.connection.prepare(
+            r#"select
+notes.note_id,
+notes.note_title,
+list(distinct { 'id': tags.tag, 'line': tags.line }) as tags,
+list(distinct { 'id': author_notes.note_id, 'name': author_notes.note_title }) as authors,
+list(distinct { 'id': refs.to_id, 'line': refs.line}) as links,
+first(notes.note_id)
+from notes 
+left join tags on notes.note_id = tags.note_id
+left join authors on notes.note_id = authors.source
+left join notes as author_notes on authors.author = author_notes.note_id
+left join refs on notes.note_id = refs.note_id
+full join parents on notes.note_id = parents.parent
+group by notes.note_title, notes.note_id;
+"#,
+        )?;
+
+        let mut res: Vec<DbValue> = vec![];
+        let mut rows = stmt.query([])?;
+        while let Some(row) = rows.next()? {
+            res.push(DbValue::make_table(vec![
+                ("id", row.get(0)?),
+                ("title", row.get(1)?),
+                ("tags", row.get(2)?),
+                ("authors", row.get(3)?),
+                ("links", row.get(4)?),
+            ]));
+        }
+
+        Ok(DbValue::List(res))
     }
 }
