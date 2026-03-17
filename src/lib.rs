@@ -1,14 +1,13 @@
-pub(crate) mod db;
-pub(crate) mod file;
-pub(crate) mod fold_rest;
-pub(crate) mod note;
-pub(crate) mod parse;
+pub mod db;
+pub mod file;
+pub mod fold_rest;
+pub mod note;
+pub mod parse;
 
-use db::DbValue;
+pub use db::DbValue;
 pub use mlua::prelude::*;
-use std::{fmt::Debug, path::Path};
+pub use std::{fmt::Debug, path::Path};
 use thiserror::Error;
-// const CACHE_FILE: &Path = Path::new("../.cache/mardown-db");
 
 pub type Result<T> = std::result::Result<T, MyError>;
 
@@ -48,7 +47,7 @@ impl<T> MyResult for Result<T> {
 fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
     let exports = lua.create_table()?;
     exports.set(
-        "update_files",
+        "update_index",
         lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
             lua_do(lua, db_file, notes_dir, |db| {
                 db.process_files()?;

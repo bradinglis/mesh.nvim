@@ -18,7 +18,7 @@ pub struct Paths {
 }
 
 impl Paths {
-    pub fn go(db: &Db) -> Result<(Vec<String>, Vec<Note>)> {
+    pub(crate) fn go(db: &Db) -> Result<(Vec<String>, Vec<Note>)> {
         let mut x = Self::init();
         x.add_from_dir(&db.notes_path);
         x.get_db_state(db).i()?;

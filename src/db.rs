@@ -1,6 +1,6 @@
 use std::{collections::HashMap, path::PathBuf, time::SystemTime};
 
-use duckdb::{Connection, Params, params, params_from_iter};
+use duckdb::{Params, params_from_iter};
 use serde::{Deserialize, Serialize};
 
 use crate::{MyError, Result, file::Paths, note};
@@ -151,9 +151,6 @@ impl duckdb::types::FromSql for DbValue {
 }
 
 impl DbValue {
-    fn make_table(list: Vec<(&str, DbValue)>) -> DbValue {
-        DbValue::Table(list.into_iter().map(|(x, y)| (x.to_string(), y)).collect())
-    }
 
     fn from_value(value: duckdb::types::Value) -> duckdb::types::FromSqlResult<Self> {
         Ok(match value {
@@ -386,8 +383,7 @@ impl Db {
     }
 
     pub fn get_tag_notes(&self, tag: String) -> Result<DbValue> {
-        let conn = duckdb::Connection::open("/home/inglisb/.cache/markdown-db")?;
-        let mut stmt = conn.prepare(
+        self.run_and_return_list(
             r#"
 select
 notes.note_id,
@@ -405,22 +401,8 @@ full join parents on notes.note_id = parents.parent
 where notes.note_id in (select note_id from tags where tag = ?)
 group by notes.note_title,notes.note_id;
 "#,
-        )?;
-
-        let mut res: Vec<DbValue> = vec![];
-        let mut rows = stmt.query([tag])?;
-        while let Some(row) = rows.next()? {
-            res.push(DbValue::make_table(vec![
-                ("id", row.get(0)?),
-                ("title", row.get(1)?),
-                ("tags", row.get(2)?),
-                ("authors", row.get(3)?),
-                ("links", row.get(4)?),
-                ("type", row.get(5)?),
-            ]));
-        }
-
-        Ok(DbValue::List(res))
+            [tag],
+        )
     }
 
     pub fn get_backlinks(&self, id: String) -> Result<DbValue> {
@@ -467,7 +449,7 @@ group by notes.note_title,notes.note_id;
         Ok(DbValue::List(res))
     }
 
-    pub fn run_and_return_table<P: Params>(self, sql: &str, params: P) -> Result<DbValue> {
+    pub fn run_and_return_table<P: Params>(&self, sql: &str, params: P) -> Result<DbValue> {
         let mut stmt = self.connection.prepare(sql)?;
 
         let mut res: Vec<(String, DbValue)> = vec![];
@@ -492,37 +474,22 @@ group by notes.note_title,notes.note_id;
     }
 
     pub fn get_tag_list(&self) -> Result<DbValue> {
-        let mut stmt = self.connection.prepare(
-            r#"select
-tag,
-count(distinct tags.note_id) as count
-from tags 
-group by tags.tag
-"#,
-        )?;
-
-        let mut res: Vec<DbValue> = vec![];
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            res.push(DbValue::make_table(vec![
-                ("tag", row.get(0)?),
-                ("count", row.get(1)?),
-            ]));
-        }
-
-        Ok(DbValue::List(res))
+        self.run_and_return_list(
+            "select tag, count(distinct tags.note_id) as count from tags group by tags.tag",
+            [],
+        )
     }
 
     pub fn get_notes(&self) -> Result<DbValue> {
         // TODO: use include_str! for sql from ../sql folder
-        let mut stmt = self.connection.prepare(
+        self.run_and_return_table(
             r#"select
-notes.note_id,
-notes.note_title,
+notes.note_id as id,
+notes.note_title as title,
 list(distinct { 'id': tags.tag, 'line': tags.line }) as tags,
 list(distinct { 'id': author_notes.note_id, 'name': author_notes.note_title }) as authors,
 list(distinct { 'id': refs.to_id, 'line': refs.line}) as links,
-first(notes.note_id)
+first(notes.note_type) as type,
 from notes 
 left join tags on notes.note_id = tags.note_id
 left join authors on notes.note_id = authors.source
@@ -531,20 +498,7 @@ left join refs on notes.note_id = refs.note_id
 full join parents on notes.note_id = parents.parent
 group by notes.note_title, notes.note_id;
 "#,
-        )?;
-
-        let mut res: Vec<DbValue> = vec![];
-        let mut rows = stmt.query([])?;
-        while let Some(row) = rows.next()? {
-            res.push(DbValue::make_table(vec![
-                ("id", row.get(0)?),
-                ("title", row.get(1)?),
-                ("tags", row.get(2)?),
-                ("authors", row.get(3)?),
-                ("links", row.get(4)?),
-            ]));
-        }
-
-        Ok(DbValue::List(res))
+            [],
+        )
     }
 }
