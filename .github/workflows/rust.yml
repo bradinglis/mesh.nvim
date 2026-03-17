@@ -29,8 +29,8 @@ jobs:
             artifact_name: target/x86_64-unknown-linux-gnu/release/libdifftastic_nvim.so
     steps:
     - uses: actions/checkout@v4
-    - name: Build
-      run: cargo build --workspace --all --locked
+      with:
+        persist-credentials: false    
     - uses: dtolnay/rust-toolchain@stable
       with:
         targets: ${{ matrix.target }}
