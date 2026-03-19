@@ -18,7 +18,7 @@ pub struct Paths {
 }
 
 impl Paths {
-    pub(crate) fn go(db: &Db) -> Result<(Vec<String>, Vec<Note>)> {
+    pub(crate) fn go(db: &Db) -> Result<(Vec<String>, Vec<Note>, String)> {
         let mut x = Self::init();
         x.add_from_dir(&db.notes_path);
         x.get_db_state(db).i()?;
@@ -55,7 +55,7 @@ impl Paths {
         }
     }
 
-    fn process(&mut self) -> (Vec<String>, Vec<Note>) {
+    fn process(&mut self) -> (Vec<String>, Vec<Note>, String) {
         while let Some(path) = self.undecided.pop() {
             if let Some(x) = self.current_state.remove(path.to_str().unwrap_or("")) {
                 if let Ok(file) = fs::File::open(&path)
@@ -77,16 +77,17 @@ impl Paths {
 
 
         // Somehow pass this back to nvim...
+        let mut message: Vec<String> = vec!["Updated Index: ".to_string()];
         for m in self.modified.clone() {
-            println!("Modified: {}", m.to_string_lossy())
+            message.push(format!("Modified: {}", m.to_string_lossy()))
         }
 
         for n in self.new.clone() {
-            println!("New: {}", n.to_string_lossy())
+            message.push(format!("New: {}", n.to_string_lossy()))
         }
 
         for d in self.deleted.clone() {
-            println!("Deleted: {}", d.to_string_lossy())
+            message.push(format!("Deleted: {}", d.to_string_lossy()))
         }
 
         let to_delete: Vec<String> = [self.modified.clone(), self.deleted.clone()]
@@ -100,7 +101,7 @@ impl Paths {
             .filter_map(|x| process_file(x).ok())
             .collect();
 
-        (to_delete, to_create)
+        (to_delete, to_create, message.join("\n"))
     }
 
     fn get_db_state(&mut self, db: &Db) -> Result<()> {

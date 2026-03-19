@@ -151,7 +151,6 @@ impl duckdb::types::FromSql for DbValue {
 }
 
 impl DbValue {
-
     fn from_value(value: duckdb::types::Value) -> duckdb::types::FromSqlResult<Self> {
         Ok(match value {
             duckdb::types::Value::Text(x) | duckdb::types::Value::Enum(x) => DbValue::String(x),
@@ -191,7 +190,7 @@ impl DbValue {
             // duckdb::types::Value::Blob(items) => todo!(),
             // duckdb::types::Value::Date32(_) => todo!(),
             // duckdb::types::Value::Time64(time_unit, _) => todo!(),
-            _ => DbValue::None,
+            x => DbValue::None,
         })
     }
 }
@@ -225,17 +224,18 @@ impl Db {
             .map_or(true, |x| x != notes_dir.to_str().unwrap_or(""))
         // If we error or have a different path, recreate tables
         {
-            println!("Creating DB tables: {}", db.db_path.to_string_lossy());
+            // TODO: Messages
+            // println!("Creating DB tables: {}", db.db_path.to_string_lossy());
             db.clear()?;
         }
 
-        println!("DB all g brother");
         Ok(db)
     }
 
-    pub fn process_files(&self) -> Result<()> {
-        let (to_remove, to_add) = Paths::go(self)?;
-        self.update_notes(to_add, to_remove)
+    pub fn process_files(&self) -> Result<String> {
+        let (to_remove, to_add, message) = Paths::go(self)?;
+        self.update_notes(to_add, to_remove)?;
+        Ok(message)
     }
 
     fn update_notes(&self, mut to_add: Vec<note::Note>, to_remove: Vec<String>) -> Result<()> {
@@ -302,7 +302,6 @@ impl Db {
         }
 
         if !notes.is_empty() {
-            println!("adding shit");
             let mut app_notes = self.connection.appender("notes")?;
             let mut app_tags = self.connection.appender("tags")?;
             let mut app_authors = self.connection.appender("authors")?;
@@ -481,24 +480,27 @@ group by notes.note_title,notes.note_id;
     }
 
     pub fn get_notes(&self) -> Result<DbValue> {
-        // TODO: use include_str! for sql from ../sql folder
-        self.run_and_return_table(
-            r#"select
-notes.note_id as id,
-notes.note_title as title,
-list(distinct { 'id': tags.tag, 'line': tags.line }) as tags,
-list(distinct { 'id': author_notes.note_id, 'name': author_notes.note_title }) as authors,
-list(distinct { 'id': refs.to_id, 'line': refs.line}) as links,
-first(notes.note_type) as type,
-from notes 
-left join tags on notes.note_id = tags.note_id
-left join authors on notes.note_id = authors.source
-left join notes as author_notes on authors.author = author_notes.note_id
-left join refs on notes.note_id = refs.note_id
-full join parents on notes.note_id = parents.parent
-group by notes.note_title, notes.note_id;
+        let x = self.run_and_return_list(
+            r#"select notes.note_id as id,
+              notes.note_title as title,
+              any_value(notes.modified) as modified, any_value(notes.note_type) as type,
+              any_value(notes.path) as path,
+              list(distinct tags.tag) as tags,
+              list(distinct author_notes.note_title) as authors,
+              list(distinct { 'id': refs.to_id, 'line': refs.line}) as links,
+              from notes
+              left join tags on notes.note_id = tags.note_id
+              left join authors on notes.note_id = authors.source
+              left join notes as author_notes on authors.author = author_notes.note_id
+              left join refs on notes.note_id = refs.note_id
+              full join parents on notes.note_id = parents.parent
+              group by notes.note_title, notes.note_id
+              order by modified desc
 "#,
             [],
-        )
+        )?;
+        // TODO: Messages
+        // println!("{:?}", x);
+        Ok(x)
     }
 }

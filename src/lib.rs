@@ -50,8 +50,7 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
         "update_index",
         lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
             lua_do(lua, db_file, notes_dir, |db| {
-                db.process_files()?;
-                Ok(LuaNil)
+                db.process_files()
             })
         })?,
     )?;
@@ -72,11 +71,9 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
 
     exports.set(
         "get_backlinks",
-        lua.create_function(
-            |lua, (notes_dir, db_file): (String, String)| {
-                lua_do(lua, db_file, notes_dir, |db| db.get_tag_list())
-            },
-        )?,
+        lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
+            lua_do(lua, db_file, notes_dir, |db| db.get_tag_list())
+        })?,
     )?;
     Ok(exports)
 }
@@ -168,5 +165,3 @@ impl IntoLua for Note {
         Ok(LuaValue::Table(t))
     }
 }
-
-
