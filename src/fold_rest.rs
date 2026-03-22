@@ -1,6 +1,7 @@
 use std::{fs, io};
 use crate::Result;
-type LinesIter = io::Lines<io::BufReader<fs::File>>;
+use crate::parse::LinesIter;
+
 
 pub enum IterState {
     Continue,
@@ -21,7 +22,7 @@ pub trait FoldRest {
 
 impl FoldRest for LinesIter {
 
-    type Item = std::io::Result<String>;
+    type Item = Result<String>;
     fn for_each_rest<F>(mut self, mut f: F) -> Result<LinesIter>
     where
         F: FnMut(Self::Item) -> Result<IterState>,

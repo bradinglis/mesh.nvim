@@ -33,7 +33,7 @@ end
 local get = function()
     local platform, ext = get_platform()
     local paths = util.get_paths()
-    package.cpath = "/home/inglisb/markdown_db/target/release" .. "/?.so;"
+    package.cpath = paths.release_dir .. "/?.so;"
     return require("markdown_db")
 end
 

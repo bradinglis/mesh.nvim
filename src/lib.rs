@@ -49,36 +49,68 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
     exports.set(
         "update_index",
         lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
-            lua_do(lua, db_file, notes_dir, |db| {
-                db.process_files()
-            })
+            lua_db(lua, db_file, notes_dir, |db| db.process_files())
         })?,
     )?;
     exports.set(
         "get_notes",
         lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
-            lua_do(lua, db_file, notes_dir, |db| db.get_notes())
+            lua_db(lua, db_file, notes_dir, |db| db.get_notes())
         })?,
     )?;
     exports.set(
         "get_backlinks",
         lua.create_function(
             |lua, (notes_dir, db_file, note): (String, String, String)| {
-                lua_do(lua, db_file, notes_dir, |db| db.get_backlinks(note))
+                lua_db(lua, db_file, notes_dir, |db| db.get_backlinks(note))
             },
         )?,
     )?;
 
     exports.set(
-        "get_backlinks",
+        "get_backlinks_2",
+        lua.create_function( |lua, (content, col, row): (Vec<String>, usize, usize)| {
+            let x = parse::parse_note(parse::LinesIter::List(content.into_iter())).into_lua_err()?.consume(None, None, None);
+
+            Ok(LuaNil)
+            // x.
+            },
+        )?,
+    )?;
+    exports.set(
+        "get_path",
+        lua.create_function(
+            |lua, (notes_dir, db_file, id): (String, String, String)| {
+                lua_db(lua, db_file, notes_dir, |db| db.get_path(id))
+            },
+        )?,
+    )?;
+
+    exports.set(
+        "get_tags",
         lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
-            lua_do(lua, db_file, notes_dir, |db| db.get_tag_list())
+            lua_db(lua, db_file, notes_dir, |db| db.get_tag_list())
         })?,
     )?;
+
+    exports.set(
+        "enter_command",
+        lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
+            lua_db(lua, db_file, notes_dir, |db| db.get_tag_list())
+        })?,
+    )?;
+
+    exports.set(
+        "get_tag_notes",
+        lua.create_function(|lua, (notes_dir, db_file, tag): (String, String, String)| {
+            lua_db(lua, db_file, notes_dir, |db| db.get_tag_notes(tag))
+        })?,
+    )?;
+
     Ok(exports)
 }
 
-pub fn lua_do<F, T: IntoLua>(
+pub fn lua_db<F, T: IntoLua>(
     lua: &Lua,
     db_path: String,
     notes_dir: String,
@@ -89,8 +121,8 @@ where
 {
     db::Db::init(Path::new(&notes_dir), Path::new(&db_path))
         .and_then(f)
-        .into_lua_err()?
-        .into_lua(lua)
+        .into_lua_err()
+        .and_then(|x| x.into_lua(lua))
 }
 
 pub fn bin_do<F, T: Debug>(db_path: String, notes_dir: String, f: F) -> Result<T>

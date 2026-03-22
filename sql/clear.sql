@@ -26,6 +26,8 @@ CREATE OR REPLACE TABLE tags (
   note_id TEXT NOT NULL,
   loc TEXT NOT NULL,
   line UINTEGER NULL,
+  start_col UINTEGER NULL,
+  end_col UINTEGER NULL,
   CONSTRAINT fk_Note FOREIGN KEY (note_id) REFERENCES notes(note_id)
 );
 
@@ -48,6 +50,8 @@ CREATE OR REPLACE TABLE refs (
   to_id TEXT NOT NULL,
   loc TEXT NOT NULL,
   line UINTEGER NULL,
+  start_col UINTEGER NULL,
+  end_col UINTEGER NULL,
   CONSTRAINT fk_FromNote FOREIGN KEY (note_id) REFERENCES notes(note_id)
 );
 

@@ -23,10 +23,8 @@ pub(crate) struct BodyParsing {
     source_parents: Vec<String>,
     author: Vec<String>,
     frontmatter_lines: usize,
-    path: PathBuf,
 }
 
-#[derive(Debug)]
 pub struct InterimNote {
     pub(super) id: String,
     pub(super) aliases: Option<String>,
@@ -37,7 +35,6 @@ pub struct InterimNote {
     pub(super) author: Vec<String>,
     pub(super) frontmatter_lines: usize,
     pub(super) rest: Option<LinesIter>,
-    pub(super) path: PathBuf,
 }
 
 impl BodyParsing {
@@ -57,11 +54,10 @@ impl BodyParsing {
             source_parents: note.source_parents,
             author: note.author,
             frontmatter_lines: note.frontmatter_lines,
-            path: note.path,
         }, rest))
     }
 
-    pub(crate) fn consume(mut self, hash: u64, modified: SystemTime) -> Note {
+    pub(crate) fn consume(mut self, path: Option<PathBuf>, hash: Option<u64>, modified: Option<SystemTime>) -> Note {
         self.ref_list.sort_by_key(|x| x.key());
 
         self.refs.into_iter().for_each(|x| {
@@ -82,7 +78,7 @@ impl BodyParsing {
             author: self.author,
             lines: self.line_num,
             frontmatter_lines: self.frontmatter_lines,
-            path: self.path,
+            path,
             hash,
             modified
         }
@@ -92,7 +88,7 @@ impl BodyParsing {
         rest.for_each(|x| self.parse_line(x));
     }
 
-    fn parse_line(&mut self, text: std::result::Result<String, io::Error>) {
+    fn parse_line(&mut self, text: Result<String>) {
         let text = text.unwrap_or("".to_string());
         self.get_tags(&text);
         self.get_links(&text);
@@ -106,11 +102,11 @@ impl BodyParsing {
     fn get_tags(&mut self, line: &str) {
         static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"#([a-zA-Z\-]+)").unwrap());
 
-        for (_, [tag]) in RE.captures_iter(line).map(|c| c.extract()) {
+        for (r, (_, [tag])) in RE.captures_iter(line).map(|c| (c.get_match().range(), c.extract())) {
             self.tags.push(Ref::new(
                 RefNode::Note(self.id.to_string()),
                 RefNode::Tag(tag.to_string()),
-                RefLoc::Body(self.line_num),
+                RefLoc::Body(self.line_num, r.start, r.end),
                 None,
             ));
         }
@@ -120,37 +116,39 @@ impl BodyParsing {
         static RE: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(r"\[\[([^\|\]]+)\|?([^\|\]]*)\]\]").unwrap());
 
-        for (_, [to_id, title]) in RE.captures_iter(line).map(|c| c.extract()) {
+        for (r, (_, [to_id, title])) in RE.captures_iter(line).map(|c| (c.get_match().range(), c.extract())) {
             self.links.push(Ref::new(
                 RefNode::Note(self.id.to_string()),
                 RefNode::Note(to_id.to_string()),
-                RefLoc::Body(self.line_num),
+                RefLoc::Body(self.line_num, r.start, r.end),
                 Some(title.to_string()),
             ));
         }
     }
 
     fn get_reference_intext(&mut self, line: &str) {
-        static RE_INTEXT: LazyLock<Regex> =
+        static RE: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\[([0-9]+)\]").unwrap());
-        for (_, [name, ref_num]) in RE_INTEXT.captures_iter(line).map(|c| c.extract()) {
+
+        for (r, (_, [name, ref_num])) in RE.captures_iter(line).map(|c| (c.get_match().range(), c.extract())) {
             self.refs.push(Ref::new(
                 RefNode::Note(self.id.to_string()),
                 RefNode::Local(ref_num.parse().unwrap_or(0)),
-                RefLoc::Body(self.line_num),
+                RefLoc::Body(self.line_num, r.start, r.end),
                 Some(name.to_string()),
             ));
         }
     }
 
     fn get_reference_list(&mut self, line: &str) {
-        static RE_REF: LazyLock<Regex> =
+        static RE: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(r"\[([0-9]+)\]: (.+)").unwrap());
-        for (_, [ref_num, to_id]) in RE_REF.captures_iter(line).map(|c| c.extract()) {
+
+        for (r, (_, [ref_num, to_id])) in RE.captures_iter(line).map(|c| (c.get_match().range(), c.extract())) {
             self.ref_list.push(Ref::new(
                 RefNode::Local(ref_num.parse().unwrap_or(0)),
                 RefNode::Note(to_id.to_string()),
-                RefLoc::Body(self.line_num),
+                RefLoc::Body(self.line_num, r.start, r.end),
                 None,
             ));
         }

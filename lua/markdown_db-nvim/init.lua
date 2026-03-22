@@ -1,17 +1,26 @@
-local snacks_picker = require "snacks.picker"
 local util = require "markdown_db-nvim.util"
+local pick = require "markdown_db-nvim.pick"
 
 local M = {}
 
-
 local bin = {}
 
+---@class vault_config
+---@field name string
+---@field dir string
+---@field db string?
+
+---@class opts
+---@field vaults table<string, string|vault_config>
+
+---@type opts
 M.config = {
   vaults = {
     default = "none",
   }
 }
 
+---@type vault_config
 M.current_vault = {
   name = "none",
   dir = "",
@@ -37,6 +46,7 @@ M.setup = function(opts)
   M.current_vault.db = db_root .. "/" .. M.current_vault.name .. ".duckdb"
 
   M.update()
+
   vim.api.nvim_create_autocmd("BufWritePost", {
     pattern = "*.md",
     callback = function()
@@ -45,114 +55,74 @@ M.setup = function(opts)
   })
 end
 
-M.update = function()
-  vim.notify(bin.update_index(M.current_vault.dir, M.current_vault.db))
-end
+local function run_bin(f, callback)
+  local v1, v2 = pcall(f)
 
-local set_string_width = function(text, width)
-  if (vim.fn.strdisplaywidth(text) > width) then
-    return vim.fn.strcharpart(text, -1, width) .. "…"
-  elseif vim.fn.strdisplaywidth(text) < width then
-    return text .. string.rep(" ", width - vim.fn.strdisplaywidth(text))
+  if not v1 then
+    vim.notify(v2, vim.log.levels.ERROR)
+    return
   else
-    return text
+    if callback then
+      callback(v2)
+    else
+      return v2
+    end
   end
 end
 
+M.update = function()
+  run_bin(function()
+      return bin.update_index(M.current_vault.dir, M.current_vault.db)
+    end,
+    function(v)
+      vim.notify(v, vim.log.levels.INFO)
+    end
+  )
+end
 
-local icon = {
-  author = "",
-  note = "",
-  source = "",
-}
 
 M.find_notes = function()
-  local notes = bin.get_notes(M.current_vault.dir, M.current_vault.db)
-  dd(notes)
-
-  local entries = vim.tbl_map(function(n)
-    return {
-      text = (n.title or "") .. " " .. (table.concat(n.authors, ", ") or "") .. " " .. n.id,
-      ordinal = (n.title or "") .. " " .. (table.concat(n.authors, ", ") or "") .. " " .. n.id,
-      title = (n.title or ""),
-      author = (table.concat(n.authors, ", ") or ""),
-      tags = n.tags,
-      icon = icon[n.type] or "",
-      -- score_add = 70 + ((n.note.recency * -1)/10),
-      file = n.path,
-      id = n.id,
-      link = "[[" .. n.id .. "|" .. (n.title or "") .. "]]",
-    }
-  end, notes)
-
-
-  local pick = {
-    layout = {
-      layout = {
-        backdrop = false,
-        width = 0.90,
-        min_width = 80,
-        height = 0.95,
-        border = "none",
-        box = "vertical",
-        { win = "preview", title = "{preview}", height = 0.5, border = "single" },
-        {
-          box = "vertical",
-          border = "single",
-          title = "{title} {live} {flags}",
-          title_pos = "center",
-          { win = "input", height = 1,     border = "bottom" },
-          { win = "list",  border = "none" },
-        },
-      }
-    },
-    win = {
-      input = {
-        keys = {
-          ["<C-l>"] = { "put_link", mode = { "n", "i" }, desc = "Put Link" },
-          ["<C-o>"] = { "put_id", mode = { "n", "i" }, desc = "Put ID" },
-        },
-      },
-    },
-    buffers = true,
-    actions = {
-      put_link = function(picker)
-        local link = picker:current().link
-        picker:close()
-        vim.api.nvim_put({ link }, "", false, true)
-      end,
-      put_id = function(picker)
-        local id = picker:current().id
-        picker:close()
-        vim.api.nvim_put({ id }, "", false, true)
-      end,
-    },
-  }
-
-  local pick_opts = vim.tbl_deep_extend('force', pick or {}, {
-    title = "Notes",
-    items = entries,
-    format = function(item, _)
-      if item.author ~= "" then
-        return {
-          { set_string_width(item.icon, 2) .. " ",                     "Fg" },
-          { set_string_width(item.title, 40) .. " ",                   "markdownBoldItalic" },
-          { set_string_width(item.author, 20) .. " ",                  "markdownItalic" },
-          { set_string_width(table.concat(item.tags, " "), 60) .. " ", "ObsidianTag" },
-          { item.id,                                                   "Grey" }
-        }
-      else
-        return {
-          { set_string_width(item.icon, 2) .. " ",                     "Fg" },
-          { set_string_width(item.title, 60) .. " ",                   "markdownBoldItalic" },
-          { set_string_width(table.concat(item.tags, " "), 60) .. " ", "ObsidianTag" },
-          { item.id,                                                   "Grey" }
-        }
-      end
+  run_bin(function()
+      return bin.get_notes(M.current_vault.dir, M.current_vault.db)
+    end,
+    function(notes)
+      pick.from_notes(notes)
     end
-  })
+  )
+end
 
-  snacks_picker.pick(pick_opts)
+M.find_tags = function()
+  run_bin(function()
+      return bin.get_tags(M.current_vault.dir, M.current_vault.db)
+    end,
+    function(tags)
+      pick.from_tags(tags)
+    end
+  )
+end
+
+M.find_links = function()
+  local current_buf = vim.api.nvim_get_current_buf()
+  local note_id = vim.split(vim.fs.basename(vim.api.nvim_buf_get_name(current_buf)), "%.")[1]
+
+  run_bin(function()
+      return bin.get_backlinks_2(M.current_vault.dir, M.current_vault.db, note_id)
+    end,
+    function(notes)
+      pick.from_notes(notes)
+    end
+  )
+
+end
+
+M.find_tag_notes = function(tag)
+  return run_bin(function()
+      return bin.get_tag_notes(M.current_vault.dir, M.current_vault.db, tag)
+    end,
+    function(notes)
+      pick.from_notes(notes)
+    end
+  )
 end
 
 return M

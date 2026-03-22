@@ -17,9 +17,9 @@ pub(crate) struct Note {
     pub(crate) author: Vec<String>,
     pub(crate) lines: usize,
     pub(crate) frontmatter_lines: usize,
-    pub(crate) path: PathBuf,
-    pub(crate) hash: u64,
-    pub(crate) modified: SystemTime,
+    pub(crate) path: Option<PathBuf>,
+    pub(crate) hash: Option<u64>,
+    pub(crate) modified: Option<SystemTime>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -87,8 +87,8 @@ pub(crate) enum RefNode {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) enum RefLoc {
-    FrontMatter,
-    Body(usize),
+    FrontMatter(usize, usize, usize),
+    Body(usize, usize, usize),
 }
 
 impl Ref {

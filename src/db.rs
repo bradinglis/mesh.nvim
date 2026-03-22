@@ -1,4 +1,8 @@
-use std::{collections::HashMap, path::PathBuf, time::SystemTime};
+use std::{
+    collections::HashMap,
+    path::PathBuf,
+    time::{Instant, SystemTime},
+};
 
 use duckdb::{Params, params_from_iter};
 use serde::{Deserialize, Serialize};
@@ -11,13 +15,17 @@ pub struct Reference {
     to_note: String,
     loc: String,
     line: Option<usize>,
+    start_col: Option<usize>,
+    end_col: Option<usize>,
 }
 
 impl Reference {
     fn from_link(l: note::Ref) -> Result<Self> {
-        let (loc, line) = match l.loc {
-            note::RefLoc::FrontMatter => ("frontmatter".to_string(), None),
-            note::RefLoc::Body(x) => ("body".to_string(), Some(x)),
+        let (loc, line, start_col, end_col) = match l.loc {
+            note::RefLoc::FrontMatter(x, y, z) => {
+                ("frontmatter".to_string(), Some(x), Some(y), Some(z))
+            }
+            note::RefLoc::Body(x, y, z) => ("body".to_string(), Some(x), Some(y), Some(z)),
         };
 
         if let note::RefNode::Note(note_id) = l.from
@@ -28,6 +36,8 @@ impl Reference {
                 to_note,
                 loc,
                 line,
+                start_col,
+                end_col,
             })
         } else {
             Err(MyError::ParseError("link is weird".to_string()))
@@ -41,13 +51,17 @@ pub struct Tag {
     note_id: String,
     loc: String,
     line: Option<usize>,
+    start_col: Option<usize>,
+    end_col: Option<usize>,
 }
 
 impl Tag {
     fn from_tag(r: note::Ref) -> Result<Self> {
-        let (loc, line) = match r.loc {
-            note::RefLoc::FrontMatter => ("frontmatter".to_string(), None),
-            note::RefLoc::Body(x) => ("body".to_string(), Some(x)),
+        let (loc, line, start_col, end_col) = match r.loc {
+            note::RefLoc::FrontMatter(x, y, z) => {
+                ("frontmatter".to_string(), Some(x), Some(y), Some(z))
+            }
+            note::RefLoc::Body(x, y, z) => ("body".to_string(), Some(x), Some(y), Some(z)),
         };
 
         if let note::RefNode::Note(note_id) = r.from
@@ -58,6 +72,8 @@ impl Tag {
                 note_id,
                 loc,
                 line,
+                start_col,
+                end_col,
             })
         } else {
             Err(MyError::ParseError("Tag is weird".to_string()))
@@ -95,17 +111,21 @@ pub struct Note {
 }
 
 impl Note {
-    fn from_note(n: note::Note) -> Self {
-        Self {
+    fn from_note(n: note::Note) -> Result<Self> {
+        Ok(Self {
             id: n.id,
             note_type: n.note_type.to_string(),
             alias: n.aliases,
             lines: n.lines,
             frontmatter_lines: n.frontmatter_lines,
-            path: n.path.to_str().unwrap_or("").to_string(),
-            modified: n.modified,
-            hash: n.hash,
-        }
+            path: n.path.map(|x| x.to_str().unwrap_or("").to_string()).unwrap_or("".to_string()),
+            modified: n
+                .modified
+                .ok_or(MyError::FileError("No modified time".to_string()))?,
+            hash: n
+                .hash
+                .ok_or(MyError::FileError("No file hash".to_string()))?,
+        })
     }
 }
 
@@ -190,7 +210,7 @@ impl DbValue {
             // duckdb::types::Value::Blob(items) => todo!(),
             // duckdb::types::Value::Date32(_) => todo!(),
             // duckdb::types::Value::Time64(time_unit, _) => todo!(),
-            x => DbValue::None,
+            _x => DbValue::None,
         })
     }
 }
@@ -198,14 +218,14 @@ impl DbValue {
 pub struct Db {
     pub(crate) connection: duckdb::Connection,
     pub(crate) notes_path: PathBuf,
-    pub(crate) db_path: PathBuf,
+    // pub(crate) db_path: PathBuf,
 }
 
 impl Db {
     pub fn init(notes_dir: &std::path::Path, db_path: &std::path::Path) -> Result<Self> {
         let db = Self {
             connection: duckdb::Connection::open(db_path)?,
-            db_path: db_path.to_path_buf(),
+            // db_path: db_path.to_path_buf(),
             notes_path: notes_dir.to_path_buf(),
         };
 
@@ -220,12 +240,8 @@ impl Db {
                     Ok(path)
                 })
             })
-            .inspect_err(|x| eprint!("Error: {}", x))
             .map_or(true, |x| x != notes_dir.to_str().unwrap_or(""))
-        // If we error or have a different path, recreate tables
         {
-            // TODO: Messages
-            // println!("Creating DB tables: {}", db.db_path.to_string_lossy());
             db.clear()?;
         }
 
@@ -233,38 +249,18 @@ impl Db {
     }
 
     pub fn process_files(&self) -> Result<String> {
-        let (to_remove, to_add, message) = Paths::go(self)?;
-        self.update_notes(to_add, to_remove)?;
-        Ok(message)
+        let start = Instant::now();
+
+        let (to_remove, to_add, mut message) = Paths::go(self)?;
+        if !(to_remove.is_empty() && to_add.is_empty()) {
+            self.update_notes(to_add, to_remove)?;
+        }
+
+        message.push(format!("Time Taken: {}s", start.elapsed().as_secs_f64()));
+        Ok(message.join("\n"))
     }
 
     fn update_notes(&self, mut to_add: Vec<note::Note>, to_remove: Vec<String>) -> Result<()> {
-        let mut notes: Vec<Note> = vec![];
-        let mut tags: Vec<Tag> = vec![];
-        let mut references: Vec<Reference> = vec![];
-        let mut parent: Vec<Parent> = vec![];
-        let mut author: Vec<Author> = vec![];
-        let mut content: Vec<Content> = vec![];
-
-        while let Some(mut n) = to_add.pop() {
-            while let Some(t) = n.tags.pop() {
-                tags.push(Tag::from_tag(t)?);
-            }
-            while let Some(r) = n.links.pop() {
-                references.push(Reference::from_link(r)?);
-            }
-            while let Some(c) = n.contents.pop() {
-                content.push(Content::from_content_line(c));
-            }
-            while let Some(p) = n.source_parents.pop() {
-                parent.push(Parent::new(p, n.id.clone()));
-            }
-            while let Some(a) = n.author.pop() {
-                author.push(Author::new(n.id.clone(), a));
-            }
-            notes.push(Note::from_note(n));
-        }
-
         if !to_remove.is_empty() {
             let placeholders: Vec<&str> = std::iter::repeat_n("?", to_remove.len()).collect();
             self.connection.execute(
@@ -301,7 +297,35 @@ impl Db {
             )?;
         }
 
-        if !notes.is_empty() {
+        if !to_add.is_empty() {
+            let mut notes: Vec<Note> = vec![];
+            let mut tags: Vec<Tag> = vec![];
+            let mut references: Vec<Reference> = vec![];
+            let mut parent: Vec<Parent> = vec![];
+            let mut author: Vec<Author> = vec![];
+            let mut content: Vec<Content> = vec![];
+
+            while let Some(mut n) = to_add.pop() {
+                while let Some(t) = n.tags.pop() {
+                    tags.push(Tag::from_tag(t)?);
+                }
+                while let Some(r) = n.links.pop() {
+                    references.push(Reference::from_link(r)?);
+                }
+                while let Some(c) = n.contents.pop() {
+                    content.push(Content::from_content_line(c));
+                }
+                while let Some(p) = n.source_parents.pop() {
+                    parent.push(Parent::new(p, n.id.clone()));
+                }
+                while let Some(a) = n.author.pop() {
+                    author.push(Author::new(n.id.clone(), a));
+                }
+                if let Ok(note) = Note::from_note(n) {
+                    notes.push(note);
+                }
+            }
+
             let mut app_notes = self.connection.appender("notes")?;
             let mut app_tags = self.connection.appender("tags")?;
             let mut app_authors = self.connection.appender("authors")?;
@@ -334,13 +358,21 @@ impl Db {
                     reference.to_note,
                     reference.loc,
                     reference.line,
+                    reference.start_col,
+                    reference.end_col,
                 )
             }))?;
 
-            app_tags.append_rows(
-                tags.into_iter()
-                    .map(|tag| (tag.tag, tag.note_id, tag.loc, tag.line)),
-            )?;
+            app_tags.append_rows(tags.into_iter().map(|tag| {
+                (
+                    tag.tag,
+                    tag.note_id,
+                    tag.loc,
+                    tag.line,
+                    tag.start_col,
+                    tag.end_col,
+                )
+            }))?;
 
             app_contents.append_rows(
                 content
@@ -383,46 +415,48 @@ impl Db {
 
     pub fn get_tag_notes(&self, tag: String) -> Result<DbValue> {
         self.run_and_return_list(
-            r#"
-select
-notes.note_id,
-notes.note_title,
-list(distinct { 'id': tags.tag, 'line': tags.line }) as tags,
-list(distinct { 'id': author_notes.note_id, 'name': author_notes.note_title }) as authors,
-list(distinct { 'id': refs.to_id, 'line': refs.line}) as links,
-any_value(notes.note_type),
-from notes
-left join tags on notes.note_id = tags.note_id
-left join authors on notes.note_id = authors.source
-left join notes as author_notes on authors.author = author_notes.note_id
-left join refs on notes.note_id = refs.note_id
-full join parents on notes.note_id = parents.parent
-where notes.note_id in (select note_id from tags where tag = ?)
-group by notes.note_title,notes.note_id;
-"#,
+            &format!(
+                "select full_notes.*, tags.line, tags.start_col, tags.end_col from (select * from tags where tags.tag = ?) as tags 
+                inner join ({}) as full_notes on tags.note_id = full_notes.id
+                order by modified desc
+                ",
+                include_str!("../sql/notes_details.sql")
+            ),
             [tag],
         )
     }
 
     pub fn get_backlinks(&self, id: String) -> Result<DbValue> {
         self.run_and_return_list(
-            r#"
-select
-notes.note_id,
-notes.note_title,
-list(distinct { 'id': tags.tag, 'line': tags.line }) as tags,
-list(distinct { 'id': author_notes.note_id, 'name': author_notes.note_title }) as authors,
-list(distinct { 'id': refs.to_id, 'line': refs.line}) as links,
-any_value(notes.note_type),
-from notes
-left join tags on notes.note_id = tags.note_id
-left join authors on notes.note_id = authors.source
-left join notes as author_notes on authors.author = author_notes.note_id
-left join refs on notes.note_id = refs.note_id
-full join parents on notes.note_id = parents.parent
-where notes.note_id in (select note_id from refs where to_id = ?)
-group by notes.note_title,notes.note_id;
-"#,
+            &format!(
+                "select full_notes.*, refs.line, refs.start_col, refs.end_col from (select * from refs where refs.to_id = ?) as refs 
+                inner join ({}) as full_notes on refs.note_id = full_notes.id
+                order by modified desc",
+                include_str!("../sql/notes_details.sql")
+            ),
+            [id],
+        )
+    }
+
+    pub fn get_backlinks_2(&self, id: String) -> Result<DbValue> {
+        self.run_and_return_list(
+            &format!(
+                "select full_notes.*, 
+                coalesce(from_refs.line) as line,
+                coalesce(from_refs.start_col) as start_col,
+                coalesce(from_refs.end_col) as end_col,
+                coalesce(source_children.type, source_parents.type, source_authors.type, author_works.type, from_refs.type, to_refs.type) as link_type,
+                from ({}) as full_notes 
+                full join (select *, 'from_ref' as type from refs where refs.to_id = $1) as from_refs on from_refs.note_id = full_notes.id
+                full join (select *, 'to_ref' as type from refs where refs.note_id = $1) as to_refs on to_refs.to_id = full_notes.id
+                full join (select *, 'child' as type from parents where parents.parent = $1) as source_children on source_children.child = full_notes.id
+                full join (select *, 'parent' as type from parents where parents.child = $1) as source_parents on source_parents.parent = full_notes.id
+                full join (select *, 'author' as type from authors where authors.source = $1) as source_authors on source_authors.author = full_notes.id
+                full join (select *, 'source' as type from authors where authors.author = $1) as author_works on author_works.source = full_notes.id
+                where link_type not null
+                order by modified desc",
+                include_str!("../sql/notes_details.sql")
+            ),
             [id],
         )
     }
@@ -448,6 +482,11 @@ group by notes.note_title,notes.note_id;
         Ok(DbValue::List(res))
     }
 
+    pub fn run_and_return_one<P: Params>(&self, sql: &str, params: P) -> Result<DbValue> {
+        let mut stmt = self.connection.prepare(sql)?;
+        let x: DbValue = stmt.query_one(params, |x| x.get(0))?;
+        Ok(x)
+    }
     pub fn run_and_return_table<P: Params>(&self, sql: &str, params: P) -> Result<DbValue> {
         let mut stmt = self.connection.prepare(sql)?;
 
@@ -474,31 +513,22 @@ group by notes.note_title,notes.note_id;
 
     pub fn get_tag_list(&self) -> Result<DbValue> {
         self.run_and_return_list(
-            "select tag, count(distinct tags.note_id) as count from tags group by tags.tag",
+            r#"select tag, 
+            count(distinct tags.note_id) as count, 
+            list(distinct {'id': tags.note_id, 'line': tags.line }) as notes
+            from tags 
+            group by tags.tag
+            order by count desc"#,
             [],
         )
     }
 
+    pub fn get_path(&self, id: String) -> Result<DbValue> {
+        self.run_and_return_one(r#"select path from notes where note_id = ?"#, [id])
+    }
+
     pub fn get_notes(&self) -> Result<DbValue> {
-        let x = self.run_and_return_list(
-            r#"select notes.note_id as id,
-              notes.note_title as title,
-              any_value(notes.modified) as modified, any_value(notes.note_type) as type,
-              any_value(notes.path) as path,
-              list(distinct tags.tag) as tags,
-              list(distinct author_notes.note_title) as authors,
-              list(distinct { 'id': refs.to_id, 'line': refs.line}) as links,
-              from notes
-              left join tags on notes.note_id = tags.note_id
-              left join authors on notes.note_id = authors.source
-              left join notes as author_notes on authors.author = author_notes.note_id
-              left join refs on notes.note_id = refs.note_id
-              full join parents on notes.note_id = parents.parent
-              group by notes.note_title, notes.note_id
-              order by modified desc
-"#,
-            [],
-        )?;
+        let x = self.run_and_return_list(include_str!("../sql/notes_details.sql"), [])?;
         // TODO: Messages
         // println!("{:?}", x);
         Ok(x)

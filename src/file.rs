@@ -18,7 +18,7 @@ pub struct Paths {
 }
 
 impl Paths {
-    pub(crate) fn go(db: &Db) -> Result<(Vec<String>, Vec<Note>, String)> {
+    pub(crate) fn go(db: &Db) -> Result<(Vec<String>, Vec<Note>, Vec<String>)> {
         let mut x = Self::init();
         x.add_from_dir(&db.notes_path);
         x.get_db_state(db).i()?;
@@ -55,7 +55,7 @@ impl Paths {
         }
     }
 
-    fn process(&mut self) -> (Vec<String>, Vec<Note>, String) {
+    fn process(&mut self) -> (Vec<String>, Vec<Note>, Vec<String>) {
         while let Some(path) = self.undecided.pop() {
             if let Some(x) = self.current_state.remove(path.to_str().unwrap_or("")) {
                 if let Ok(file) = fs::File::open(&path)
@@ -101,12 +101,12 @@ impl Paths {
             .filter_map(|x| process_file(x).ok())
             .collect();
 
-        (to_delete, to_create, message.join("\n"))
+        (to_delete, to_create, message)
     }
 
     fn get_db_state(&mut self, db: &Db) -> Result<()> {
 
-        self.current_state = db.get_hashes().i()?;
+        self.current_state = db.get_hashes()?;
 
         Ok(())
     }
@@ -118,7 +118,8 @@ fn process_file(path: &Path) -> Result<Note> {
     let hash = rapidhash::v3::rapidhash_v3_file(&file)?;
     let file = fs::File::open(path)?;
     let reader = io::BufReader::new(file);
-    let note = parse::parse_note(path, reader.lines(), hash, modified).i()?;
+    let body_parse = parse::parse_note(parse::LinesIter::File(reader.lines()))?;
+    let note = body_parse.consume(Some(path.to_path_buf()),Some(hash), Some(modified));
 
     Ok(note)
 }

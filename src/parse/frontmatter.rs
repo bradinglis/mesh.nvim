@@ -20,21 +20,22 @@ pub(crate) struct FrontMatterParsing {
 }
 
 impl FrontMatterParsing {
-    pub fn parse(path: &Path, iter: LinesIter) -> Result<InterimNote> {
+    pub fn parse(iter: LinesIter) -> Result<InterimNote> {
         let mut new = Self::new();
 
-        let mut line_num: usize = 0;
+        let mut lnum: usize = 1;
         let rest = iter.for_each_rest(|x| {
             let line = x?;
-            line_num += 0;
+            lnum += 1;
             match line.as_str() {
                 "---" => Ok(IterState::Break),
                 _ => {
-                    new.add_line_to_frontmatter(line)?;
+                    new.add_line_to_frontmatter(line, lnum)?;
                     Ok(IterState::Continue)
                 }
             }
         })?;
+        lnum += 1;
 
         let id = new
             .id
@@ -49,20 +50,19 @@ impl FrontMatterParsing {
             source_parents: new.source_parents,
             author: new.author,
             rest: Some(rest),
-            frontmatter_lines: line_num,
-            path: path.to_path_buf(),
+            frontmatter_lines: lnum,
         })
     }
 
-    fn add_line_to_frontmatter(&mut self, line: String) -> Result<()> {
+    fn add_line_to_frontmatter(&mut self, line: String, lnum: usize) -> Result<()> {
         let _: () = match line.split_once(": ") {
             Some(("id", suff)) => self.id = Some(suff.to_string()),
             Some(("aliases", suff)) => self.aliases = Some(suff.to_string()),
             Some(("type", suff)) => self.note_type = Some(suff.to_string()),
             Some(("source-parents", suff)) => self.add_source_parents(suff),
             Some(("author", suff)) => self.add_authors(suff),
-            Some(("references", suff)) => self.add_references(suff),
-            Some(("tags", suff)) => self.add_tags(suff),
+            Some(("references", suff)) => self.add_references(suff, lnum),
+            Some(("tags", suff)) => self.add_tags(suff, lnum),
             Some((x, y)) => Err(MyError::ParseError(format!("Unknown field: {x}: {y}")))?,
             None => Err(MyError::ParseError("Unknown field".to_string()))?,
         };
@@ -85,13 +85,17 @@ impl FrontMatterParsing {
         }
     }
 
-    fn add_tags(&mut self, text: &str) {
+    fn add_tags(&mut self, text: &str, line: usize) {
+        let mut pos: usize = 6;
         if let Some(tags) = Self::get_text_list(text).map(|iter| {
             iter.map(|tag| {
+                let start = pos;
+                let end = pos+tag.len();
+                pos = end + 1;
                 Ref::new(
                     RefNode::Note(self.id.clone().unwrap_or("".to_string())),
                     RefNode::Tag(tag.to_string()),
-                    RefLoc::FrontMatter,
+                    RefLoc::FrontMatter(line, start, end),
                     None,
                 )
             })
@@ -101,13 +105,17 @@ impl FrontMatterParsing {
         }
     }
 
-    fn add_references(&mut self, text: &str) {
+    fn add_references(&mut self, text: &str, line: usize) {
+        let mut pos: usize = 12;
         if let Some(references) = Self::get_text_list(text).map(|iter| {
             iter.map(|reference| {
+                let start = pos;
+                let end = pos+reference.len();
+                pos = end + 1;
                 Ref::new(
                     RefNode::Note(self.id.clone().unwrap_or("".to_string())),
                     RefNode::Note(reference.to_string()),
-                    RefLoc::FrontMatter,
+                    RefLoc::FrontMatter(line, start, end),
                     None,
                 )
             })
