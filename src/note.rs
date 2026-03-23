@@ -12,6 +12,7 @@ pub(crate) struct Note {
     pub(crate) note_type: NoteType,
     pub(crate) tags: Vec<Ref>,
     pub(crate) links: Vec<Ref>,
+    pub(crate) headings: Vec<Anchor>,
     pub(crate) contents: Vec<ContentLine>,
     pub(crate) source_parents: Vec<String>,
     pub(crate) author: Vec<String>,
@@ -59,7 +60,7 @@ impl NoteType {
 
 impl Display for NoteType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let x =match self {
+        let x = match self {
             NoteType::Source => "source".to_string(),
             NoteType::Author => "author".to_string(),
             NoteType::Note => "note".to_string(),
@@ -68,7 +69,6 @@ impl Display for NoteType {
         f.write_fmt(format_args!("{}", x))
     }
 }
-
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Ref {
@@ -79,8 +79,22 @@ pub(crate) struct Ref {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Anchor {
+    pub(crate) note_id: String,
+    pub(crate) title: String,
+    pub(crate) heading_link: String,
+    pub(crate) loc: RefLoc,
+}
+
+impl Anchor {
+    pub(crate) fn new(note_id: String, title: String, heading_link: String, loc: RefLoc) -> Self {
+        Self { note_id, title, heading_link, loc }
+    }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) enum RefNode {
-    Note(String),
+    NoteAnchor(String),
     Tag(String),
     Local(usize),
 }
@@ -111,10 +125,31 @@ impl Ref {
 
     pub fn key(&self) -> usize {
         match self.from {
-            RefNode::Note(_) => 999,
+            RefNode::NoteAnchor(_) => 999,
             RefNode::Tag(_) => 999,
             RefNode::Local(x) => x,
         }
     }
 
+}
+
+impl Note {
+    pub fn get_ref(&self, col: usize, row: usize) -> Option<Ref> {
+        let mut refs = self.tags.clone();
+        refs.append(&mut self.links.clone());
+
+        refs.into_iter().find(|r| {
+            let (x, y, z) = r.loc.clone().get_loc();
+            (x == col) && (y <= row) && (z >= row)
+        })
+    }
+}
+
+impl RefLoc {
+    pub fn get_loc(self) -> (usize, usize, usize) {
+        match self {
+            RefLoc::FrontMatter(x, y, z) => (x, y, z),
+            RefLoc::Body(x, y, z) => (x, y, z),
+        }
+    }
 }

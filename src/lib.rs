@@ -9,7 +9,27 @@ pub use mlua::prelude::*;
 pub use std::{fmt::Debug, path::Path};
 use thiserror::Error;
 
+use crate::note::RefNode;
+
 pub type Result<T> = std::result::Result<T, MyError>;
+
+pub trait ToNoteId {
+    fn to_note_id(self) -> String;
+}
+
+impl ToNoteId for String {
+    fn to_note_id(self) -> String {
+        self.split(" ")
+            .map(|x| {
+                x.to_lowercase()
+                    .chars()
+                    .filter(|y| *y == '-' || y.is_ascii_alphanumeric())
+                    .collect()
+            })
+            .collect::<Vec<String>>()
+            .join("-")
+    }
+}
 
 #[derive(Error, Debug)]
 pub enum MyError {
@@ -17,6 +37,8 @@ pub enum MyError {
     Io(#[from] std::io::Error),
     #[error("DuckDB error: {0}")]
     DuckDb(#[from] duckdb::Error),
+    #[error("MLua error: {0}")]
+    Mlua(#[from] mlua::Error),
     #[error("Json error: {0}")]
     Json(#[from] serde_json::Error),
     #[error("File error: {0}")]
@@ -62,29 +84,48 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
         "get_backlinks",
         lua.create_function(
             |lua, (notes_dir, db_file, note): (String, String, String)| {
-                lua_db(lua, db_file, notes_dir, |db| db.get_backlinks(note))
+                lua_db(lua, db_file, notes_dir, |db| db.get_backlinks_2(note))
             },
         )?,
     )?;
 
     exports.set(
         "get_backlinks_2",
-        lua.create_function( |lua, (content, col, row): (Vec<String>, usize, usize)| {
-            let x = parse::parse_note(parse::LinesIter::List(content.into_iter())).into_lua_err()?.consume(None, None, None);
-
-            Ok(LuaNil)
-            // x.
-            },
-        )?,
-    )?;
-    exports.set(
-        "get_path",
         lua.create_function(
-            |lua, (notes_dir, db_file, id): (String, String, String)| {
-                lua_db(lua, db_file, notes_dir, |db| db.get_path(id))
+            |lua,
+             (notes_dir, db_file, content, col, row): (
+                String,
+                String,
+                Vec<String>,
+                usize,
+                usize,
+            )| {
+                lua_db_multi(lua, db_file, notes_dir, |db| {
+                    let x = parse::parse_note(parse::LinesIter::List(content.into_iter()))?
+                        .consume(None, None, None);
+                    let x = x.get_ref(col, row);
+
+                    Ok(match x {
+                        Some(r) => match r.to {
+                            RefNode::NoteAnchor(anchor) => {
+                                let (a, b, c) = db.get_loc(anchor)?;
+                                ("note", a, b, c).into_lua_multi(lua)?
+                            }
+                            RefNode::Tag(tag) => ("tag", tag).into_lua_multi(lua)?,
+                            _ => LuaNil.into_lua_multi(lua)?,
+                        },
+                        None => LuaNil.into_lua_multi(lua)?,
+                    })
+                })
             },
         )?,
     )?;
+    // exports.set(
+    //     "get_path",
+    //     lua.create_function(|lua, (notes_dir, db_file, id): (String, String, String)| {
+    //         lua_db(lua, db_file, notes_dir, |db| db.get_path(id))
+    //     })?,
+    // )?;
 
     exports.set(
         "get_tags",
@@ -123,6 +164,21 @@ where
         .and_then(f)
         .into_lua_err()
         .and_then(|x| x.into_lua(lua))
+}
+
+pub fn lua_db_multi<F, T: IntoLuaMulti>(
+    lua: &Lua,
+    db_path: String,
+    notes_dir: String,
+    f: F,
+) -> LuaResult<LuaMultiValue>
+where
+    F: FnOnce(db::Db) -> Result<T>,
+{
+    db::Db::init(Path::new(&notes_dir), Path::new(&db_path))
+        .and_then(f)
+        .into_lua_err()
+        .and_then(|x| x.into_lua_multi(lua))
 }
 
 pub fn bin_do<F, T: Debug>(db_path: String, notes_dir: String, f: F) -> Result<T>

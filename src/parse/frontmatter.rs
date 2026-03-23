@@ -93,7 +93,7 @@ impl FrontMatterParsing {
                 let end = pos+tag.len();
                 pos = end + 1;
                 Ref::new(
-                    RefNode::Note(self.id.clone().unwrap_or("".to_string())),
+                    RefNode::NoteAnchor(self.id.clone().unwrap_or("".to_string())),
                     RefNode::Tag(tag.to_string()),
                     RefLoc::FrontMatter(line, start, end),
                     None,
@@ -113,8 +113,8 @@ impl FrontMatterParsing {
                 let end = pos+reference.len();
                 pos = end + 1;
                 Ref::new(
-                    RefNode::Note(self.id.clone().unwrap_or("".to_string())),
-                    RefNode::Note(reference.to_string()),
+                    RefNode::NoteAnchor(self.id.clone().unwrap_or("".to_string())),
+                    RefNode::NoteAnchor(reference.to_string()),
                     RefLoc::FrontMatter(line, start, end),
                     None,
                 )

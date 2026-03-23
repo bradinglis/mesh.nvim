@@ -13,14 +13,6 @@ pub enum LinesIter {
     List(std::vec::IntoIter<String>)
 }
 
-impl LinesIter {
-    pub fn next(&mut self) -> Option<Result<String>>{
-        match self {
-            LinesIter::File(lines) => lines.next().map(|x| x.map_err(|x| x.into())),
-            LinesIter::List(items) => items.next().map(Ok),
-        }
-    }
-}
 impl Iterator for LinesIter {
     type Item = Result<String>;
 

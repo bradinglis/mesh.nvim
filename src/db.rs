@@ -28,8 +28,8 @@ impl Reference {
             note::RefLoc::Body(x, y, z) => ("body".to_string(), Some(x), Some(y), Some(z)),
         };
 
-        if let note::RefNode::Note(note_id) = l.from
-            && let note::RefNode::Note(to_note) = l.to
+        if let note::RefNode::NoteAnchor(note_id) = l.from
+            && let note::RefNode::NoteAnchor(to_note) = l.to
         {
             Ok(Self {
                 note_id,
@@ -64,7 +64,7 @@ impl Tag {
             note::RefLoc::Body(x, y, z) => ("body".to_string(), Some(x), Some(y), Some(z)),
         };
 
-        if let note::RefNode::Note(note_id) = r.from
+        if let note::RefNode::NoteAnchor(note_id) = r.from
             && let note::RefNode::Tag(tag) = r.to
         {
             Ok(Self {
@@ -118,7 +118,10 @@ impl Note {
             alias: n.aliases,
             lines: n.lines,
             frontmatter_lines: n.frontmatter_lines,
-            path: n.path.map(|x| x.to_str().unwrap_or("").to_string()).unwrap_or("".to_string()),
+            path: n
+                .path
+                .map(|x| x.to_str().unwrap_or("").to_string())
+                .unwrap_or("".to_string()),
             modified: n
                 .modified
                 .ok_or(MyError::FileError("No modified time".to_string()))?,
@@ -150,6 +153,33 @@ pub struct Author {
 impl Author {
     pub fn new(source: String, author: String) -> Self {
         Self { source, author }
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct Anchor {
+    note_id: String,
+    anchor_id: String,
+    line: Option<usize>,
+    start_col: Option<usize>,
+    end_col: Option<usize>,
+}
+
+impl Anchor {
+    pub fn from_heading(from: note::Anchor) -> Self {
+        let (loc, line, start_col, end_col) = match from.loc {
+            note::RefLoc::FrontMatter(x, y, z) => {
+                ("frontmatter".to_string(), Some(x), Some(y), Some(z))
+            }
+            note::RefLoc::Body(x, y, z) => ("body".to_string(), Some(x), Some(y), Some(z)),
+        };
+        Anchor {
+            note_id: from.note_id,
+            anchor_id: from.heading_link,
+            line,
+            start_col,
+            end_col,
+        }
     }
 }
 
@@ -289,6 +319,11 @@ impl Db {
             )?;
 
             self.connection.execute(
+                &format!("delete from anchors where note_id in (select note_id from notes where path in ({}))", placeholders.join(", ")),
+                params_from_iter(&to_remove),
+            )?;
+
+            self.connection.execute(
                 &format!(
                     "delete from notes where path in ({})",
                     placeholders.join(", ")
@@ -303,6 +338,7 @@ impl Db {
             let mut references: Vec<Reference> = vec![];
             let mut parent: Vec<Parent> = vec![];
             let mut author: Vec<Author> = vec![];
+            let mut headings: Vec<Anchor> = vec![];
             let mut content: Vec<Content> = vec![];
 
             while let Some(mut n) = to_add.pop() {
@@ -321,6 +357,9 @@ impl Db {
                 while let Some(a) = n.author.pop() {
                     author.push(Author::new(n.id.clone(), a));
                 }
+                while let Some(h) = n.headings.pop() {
+                    headings.push(Anchor::from_heading(h));
+                }
                 if let Ok(note) = Note::from_note(n) {
                     notes.push(note);
                 }
@@ -332,6 +371,7 @@ impl Db {
             let mut app_parents = self.connection.appender("parents")?;
             let mut app_references = self.connection.appender("refs")?;
             let mut app_contents = self.connection.appender("contents")?;
+            let mut app_headings = self.connection.appender("anchors")?;
 
             app_notes.append_rows(notes.into_iter().filter_map(|x| {
                 Some((
@@ -349,6 +389,12 @@ impl Db {
             app_notes.flush()?;
 
             app_authors.append_rows(author.into_iter().map(|x| (x.source, x.author)))?;
+
+            app_headings.append_rows(
+                headings
+                    .into_iter()
+                    .map(|x| (x.note_id, x.anchor_id, x.line, x.start_col, x.end_col)),
+            )?;
 
             app_parents.append_rows(parent.into_iter().map(|x| (x.parent, x.child)))?;
 
@@ -385,6 +431,7 @@ impl Db {
             app_references.flush()?;
             app_parents.flush()?;
             app_contents.flush()?;
+            app_headings.flush()?;
         };
 
         Ok(())
@@ -482,11 +529,21 @@ impl Db {
         Ok(DbValue::List(res))
     }
 
-    pub fn run_and_return_one<P: Params>(&self, sql: &str, params: P) -> Result<DbValue> {
+    pub fn run_and_return_one<P: Params>(&self, sql: &str, params: P) -> Result<Vec<DbValue>> {
         let mut stmt = self.connection.prepare(sql)?;
-        let x: DbValue = stmt.query_one(params, |x| x.get(0))?;
+        let x: Vec<DbValue> = stmt.query_one(params, |row| {
+            let mut r = vec![];
+            let mut i = 0;
+            while let Ok(col) = row.get(i) {
+                r.push(col);
+                i += 1;
+            }
+            Ok(r)
+        })?;
+
         Ok(x)
     }
+
     pub fn run_and_return_table<P: Params>(&self, sql: &str, params: P) -> Result<DbValue> {
         let mut stmt = self.connection.prepare(sql)?;
 
@@ -523,8 +580,20 @@ impl Db {
         )
     }
 
-    pub fn get_path(&self, id: String) -> Result<DbValue> {
-        self.run_and_return_one(r#"select path from notes where note_id = ?"#, [id])
+    // pub fn get_path(&self, id: String) -> Result<DbValue> {
+    //     self.run_and_return_one(r#"select notes.path from notes where note_id = ?"#, [id])
+    // }
+
+    pub fn get_loc(&self, id: String) -> Result<(Option<DbValue>, Option<DbValue>, Option<DbValue>)> {
+        let mut x = self.run_and_return_one(r#"select notes.path, anchors.line, anchors.start_col from anchors natural join notes where anchors.anchor_id = ?"#, [id])?;
+        let c = x.pop();
+        let b = x.pop();
+        let a = x.pop();
+        Ok((
+            a,
+            b,
+            c,
+        ))
     }
 
     pub fn get_notes(&self) -> Result<DbValue> {

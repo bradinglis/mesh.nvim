@@ -2,12 +2,11 @@ use crate::parse::LinesIter;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use crate::{MyError, Result};
+use crate::{MyError, Result, ToNoteId};
 use regex::Regex;
-use std::io::{self};
 use std::sync::LazyLock;
 
-use crate::note::{ContentLine, Note, NoteType, Ref, RefLoc, RefNode};
+use crate::note::{Anchor, ContentLine, Note, NoteType, Ref, RefLoc, RefNode};
 
 pub(crate) struct BodyParsing {
     id: String,
@@ -22,6 +21,7 @@ pub(crate) struct BodyParsing {
     references: Vec<Ref>,
     source_parents: Vec<String>,
     author: Vec<String>,
+    headings: Vec<Anchor>,
     frontmatter_lines: usize,
 }
 
@@ -39,25 +39,36 @@ pub struct InterimNote {
 
 impl BodyParsing {
     pub(crate) fn init(note: InterimNote) -> Result<(Self, LinesIter)> {
-        let rest =  note.rest.ok_or(MyError::ParseError("reader not working".to_string()))?;
-        Ok((BodyParsing {
-            id: note.id,
-            contents: vec![],
-            tags: note.tags,
-            links: vec![],
-            line_num: note.frontmatter_lines,
-            aliases: note.aliases,
-            note_type: note.note_type,
-            refs: vec![],
-            ref_list: vec![],
-            references: note.references,
-            source_parents: note.source_parents,
-            author: note.author,
-            frontmatter_lines: note.frontmatter_lines,
-        }, rest))
+        let rest = note
+            .rest
+            .ok_or(MyError::ParseError("reader not working".to_string()))?;
+        Ok((
+            BodyParsing {
+                id: note.id,
+                contents: vec![],
+                tags: note.tags,
+                links: vec![],
+                line_num: note.frontmatter_lines,
+                aliases: note.aliases,
+                note_type: note.note_type,
+                refs: vec![],
+                headings: vec![],
+                ref_list: vec![],
+                references: note.references,
+                source_parents: note.source_parents,
+                author: note.author,
+                frontmatter_lines: note.frontmatter_lines,
+            },
+            rest,
+        ))
     }
 
-    pub(crate) fn consume(mut self, path: Option<PathBuf>, hash: Option<u64>, modified: Option<SystemTime>) -> Note {
+    pub(crate) fn consume(
+        mut self,
+        path: Option<PathBuf>,
+        hash: Option<u64>,
+        modified: Option<SystemTime>,
+    ) -> Note {
         self.ref_list.sort_by_key(|x| x.key());
 
         self.refs.into_iter().for_each(|x| {
@@ -77,10 +88,11 @@ impl BodyParsing {
             source_parents: self.source_parents,
             author: self.author,
             lines: self.line_num,
+            headings: self.headings,
             frontmatter_lines: self.frontmatter_lines,
             path,
             hash,
-            modified
+            modified,
         }
     }
 
@@ -94,6 +106,7 @@ impl BodyParsing {
         self.get_links(&text);
         self.get_reference_intext(&text);
         self.get_reference_list(&text);
+        self.get_headings(&text);
         self.contents
             .push(ContentLine::new(text, self.line_num, self.id.clone()));
         self.line_num += 1;
@@ -102,12 +115,42 @@ impl BodyParsing {
     fn get_tags(&mut self, line: &str) {
         static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"#([a-zA-Z\-]+)").unwrap());
 
-        for (r, (_, [tag])) in RE.captures_iter(line).map(|c| (c.get_match().range(), c.extract())) {
+        for (r, (_, [tag])) in RE
+            .captures_iter(line)
+            .map(|c| (c.get_match().range(), c.extract()))
+        {
             self.tags.push(Ref::new(
-                RefNode::Note(self.id.to_string()),
+                RefNode::NoteAnchor(self.id.to_string()),
                 RefNode::Tag(tag.to_string()),
                 RefLoc::Body(self.line_num, r.start, r.end),
                 None,
+            ));
+        }
+    }
+
+    fn get_headings(&mut self, line: &str) {
+        static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(#+) (.+)$").unwrap());
+
+        for (r, (_, [prefix, heading])) in RE
+            .captures_iter(line)
+            .map(|c| (c.get_match().range(), c.extract()))
+        {
+            let mut heading_link = self.id.to_string();
+
+            // Possibly do heading level stuff here.. and subheading handling??
+            match prefix {
+                "#" => (),
+                _ => {
+                    heading_link.push('#');
+                    heading_link.push_str(&heading.to_string().to_note_id());
+                }
+            }
+
+            self.headings.push(Anchor::new(
+                self.id.to_string(),
+                heading.to_string(),
+                heading_link,
+                RefLoc::Body(self.line_num, r.start, r.end),
             ));
         }
     }
@@ -116,10 +159,13 @@ impl BodyParsing {
         static RE: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(r"\[\[([^\|\]]+)\|?([^\|\]]*)\]\]").unwrap());
 
-        for (r, (_, [to_id, title])) in RE.captures_iter(line).map(|c| (c.get_match().range(), c.extract())) {
+        for (r, (_, [to_id, title])) in RE
+            .captures_iter(line)
+            .map(|c| (c.get_match().range(), c.extract()))
+        {
             self.links.push(Ref::new(
-                RefNode::Note(self.id.to_string()),
-                RefNode::Note(to_id.to_string()),
+                RefNode::NoteAnchor(self.id.to_string()),
+                RefNode::NoteAnchor(to_id.to_string()),
                 RefLoc::Body(self.line_num, r.start, r.end),
                 Some(title.to_string()),
             ));
@@ -130,9 +176,12 @@ impl BodyParsing {
         static RE: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\[([0-9]+)\]").unwrap());
 
-        for (r, (_, [name, ref_num])) in RE.captures_iter(line).map(|c| (c.get_match().range(), c.extract())) {
+        for (r, (_, [name, ref_num])) in RE
+            .captures_iter(line)
+            .map(|c| (c.get_match().range(), c.extract()))
+        {
             self.refs.push(Ref::new(
-                RefNode::Note(self.id.to_string()),
+                RefNode::NoteAnchor(self.id.to_string()),
                 RefNode::Local(ref_num.parse().unwrap_or(0)),
                 RefLoc::Body(self.line_num, r.start, r.end),
                 Some(name.to_string()),
@@ -141,13 +190,15 @@ impl BodyParsing {
     }
 
     fn get_reference_list(&mut self, line: &str) {
-        static RE: LazyLock<Regex> =
-            LazyLock::new(|| Regex::new(r"\[([0-9]+)\]: (.+)").unwrap());
+        static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([0-9]+)\]: (.+)").unwrap());
 
-        for (r, (_, [ref_num, to_id])) in RE.captures_iter(line).map(|c| (c.get_match().range(), c.extract())) {
+        for (r, (_, [ref_num, to_id])) in RE
+            .captures_iter(line)
+            .map(|c| (c.get_match().range(), c.extract()))
+        {
             self.ref_list.push(Ref::new(
                 RefNode::Local(ref_num.parse().unwrap_or(0)),
-                RefNode::Note(to_id.to_string()),
+                RefNode::NoteAnchor(to_id.to_string()),
                 RefLoc::Body(self.line_num, r.start, r.end),
                 None,
             ));

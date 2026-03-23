@@ -3,8 +3,9 @@ DROP TABLE if exists parents;
 DROP TABLE if exists refs;
 DROP TABLE if exists authors;
 DROP TABLE if exists contents;
-DROP TABLE if exists notes CASCADE;
+DROP TABLE if exists anchors;
 DROP TABLE if exists metadata;
+DROP TABLE if exists notes CASCADE;
 
 CREATE OR REPLACE TABLE metadata (
   path TEXT PRIMARY KEY NOT NULL,
@@ -53,6 +54,15 @@ CREATE OR REPLACE TABLE refs (
   start_col UINTEGER NULL,
   end_col UINTEGER NULL,
   CONSTRAINT fk_FromNote FOREIGN KEY (note_id) REFERENCES notes(note_id)
+);
+
+CREATE OR REPLACE TABLE anchors (
+  note_id TEXT NOT NULL,
+  anchor_id TEXT PRIMARY KEY NOT NULL,
+  line UINTEGER NULL,
+  start_col UINTEGER NULL,
+  end_col UINTEGER NULL,
+  CONSTRAINT fk_InNote FOREIGN KEY (note_id) REFERENCES notes(note_id)
 );
 
 CREATE OR REPLACE TABLE contents (
