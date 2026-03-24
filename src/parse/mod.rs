@@ -1,9 +1,6 @@
-use std::path::Path;
-use std::time::SystemTime;
 use std::{fs, io};
 use crate::Result;
 
-use crate::note;
 pub(crate) mod body;
 pub(crate) mod frontmatter;
 

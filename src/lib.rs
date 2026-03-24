@@ -84,13 +84,13 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
         "get_backlinks",
         lua.create_function(
             |lua, (notes_dir, db_file, note): (String, String, String)| {
-                lua_db(lua, db_file, notes_dir, |db| db.get_backlinks_2(note))
+                lua_db(lua, db_file, notes_dir, |db| db.get_backlinks(note))
             },
         )?,
     )?;
 
     exports.set(
-        "get_backlinks_2",
+        "cursor_action",
         lua.create_function(
             |lua,
              (notes_dir, db_file, content, col, row): (

@@ -113,7 +113,7 @@ impl BodyParsing {
     }
 
     fn get_tags(&mut self, line: &str) {
-        static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"#([a-zA-Z\-]+)").unwrap());
+        static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s#([a-zA-Z\-]+)").unwrap());
 
         for (r, (_, [tag])) in RE
             .captures_iter(line)
@@ -122,7 +122,7 @@ impl BodyParsing {
             self.tags.push(Ref::new(
                 RefNode::NoteAnchor(self.id.to_string()),
                 RefNode::Tag(tag.to_string()),
-                RefLoc::Body(self.line_num, r.start, r.end),
+                RefLoc::Body(self.line_num, r.start+1, r.end),
                 None,
             ));
         }

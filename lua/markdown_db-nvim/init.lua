@@ -142,7 +142,7 @@ M.get_cursor = function()
   local row, col = unpack(vim.api.nvim_win_get_cursor(current_win))
 
   run_bin(function()
-      return bin.get_backlinks_2(M.current_vault.dir, M.current_vault.db, lines, row, col)
+      return bin.cursor_action(M.current_vault.dir, M.current_vault.db, lines, row, col)
     end,
     function(x, ...)
       funs[x](...)

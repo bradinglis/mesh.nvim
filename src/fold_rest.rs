@@ -1,7 +1,5 @@
-use std::{fs, io};
 use crate::Result;
 use crate::parse::LinesIter;
-
 
 pub enum IterState {
     Continue,

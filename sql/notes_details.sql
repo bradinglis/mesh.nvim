@@ -8,7 +8,7 @@ list(distinct tags.tag) as tags,
 list(distinct author_notes.note_title) as authors,
 from notes
 left join tags on notes.note_id = tags.note_id
-left join (select to_anchor from refs where kind == 'author') as authors on notes.note_id = authors.source
+left join (select to_anchor, note_id from refs where kind == 'author') as authors on notes.note_id = authors.note_id
 left join notes as author_notes on authors.to_anchor = author_notes.note_id
 left join refs on notes.note_id = refs.note_id
 group by notes.note_id

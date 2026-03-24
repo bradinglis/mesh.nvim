@@ -137,6 +137,8 @@ impl Note {
     pub fn get_ref(&self, col: usize, row: usize) -> Option<Ref> {
         let mut refs = self.tags.clone();
         refs.append(&mut self.links.clone());
+        refs.append(&mut self.source_parents.clone());
+        refs.append(&mut self.author.clone());
 
         refs.into_iter().find(|r| {
             let (x, y, z) = r.loc.clone().get_loc();

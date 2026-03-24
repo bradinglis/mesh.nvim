@@ -352,16 +352,6 @@ impl Db {
             )?;
 
             self.connection.execute(
-                &format!("delete from authors where source in (select note_id from notes where path in ({}))", placeholders.join(", ")),
-                params_from_iter(&to_remove),
-            )?;
-
-            self.connection.execute(
-                &format!("delete from parents where child in (select note_id from notes where path in ({}))", placeholders.join(", ")),
-                params_from_iter(&to_remove),
-            )?;
-
-            self.connection.execute(
                 &format!("delete from refs where note_id in (select note_id from notes where path in ({}))", placeholders.join(", ")),
                 params_from_iter(&to_remove),
             )?;
@@ -514,14 +504,14 @@ impl Db {
     pub fn get_backlinks(&self, id: String) -> Result<DbValue> {
         self.run_and_return_list(
             &format!(
-                "select full_notes.*, refs.kind, refs.line, refs.start_col, refs.end_col 
+                "select full_notes.*, refs.direction, refs.kind, refs.line, refs.start_col, refs.end_col 
                 from 
                 (
-                select *, 'back' as direction from refs where refs.to_anchor = $1
+                select kind, line, start_col, end_col, note_id as ref, 'back' as direction from refs where refs.to_anchor = $1
                 union all
-                select *, 'forward' as direction from refs where refs.note_id = $1
+                select kind, null as line, null as start_col, null as end_col, to_anchor as ref, 'forward' as direction from refs where refs.note_id = $1
                 ) as refs 
-                inner join ({}) as full_notes on refs.note_id = full_notes.id
+                inner join ({}) as full_notes on refs.ref = full_notes.id
                 order by modified desc",
                 include_str!("../sql/notes_details.sql")
             ),
