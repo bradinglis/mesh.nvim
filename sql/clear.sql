@@ -1,7 +1,5 @@
 DROP TABLE if exists tags;
-DROP TABLE if exists parents;
 DROP TABLE if exists refs;
-DROP TABLE if exists authors;
 DROP TABLE if exists contents;
 DROP TABLE if exists anchors;
 DROP TABLE if exists metadata;
@@ -32,24 +30,10 @@ CREATE OR REPLACE TABLE tags (
   CONSTRAINT fk_Note FOREIGN KEY (note_id) REFERENCES notes(note_id)
 );
 
-CREATE OR REPLACE TABLE authors (
-  source TEXT NOT NULL,
-  author TEXT NOT NULL,
-  CONSTRAINT fk_Source FOREIGN KEY (source) REFERENCES notes(note_id),
-  PRIMARY KEY (source, author)
-);
-
-CREATE OR REPLACE TABLE parents (
-  parent TEXT NOT NULL,
-  child TEXT NOT NULL,
-  CONSTRAINT fk_Child FOREIGN KEY (child) REFERENCES notes(note_id),
-  PRIMARY KEY (parent, child)
-);
-
 CREATE OR REPLACE TABLE refs (
   note_id TEXT NOT NULL,
-  to_id TEXT NOT NULL,
-  loc TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  to_anchor TEXT NOT NULL,
   line UINTEGER NULL,
   start_col UINTEGER NULL,
   end_col UINTEGER NULL,

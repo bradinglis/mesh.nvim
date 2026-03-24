@@ -15,8 +15,8 @@ pub(crate) struct FrontMatterParsing {
     note_type: Option<String>,
     tags: Vec<Ref>,
     references: Vec<Ref>,
-    source_parents: Vec<String>,
-    author: Vec<String>,
+    source_parents: Vec<Ref>,
+    author: Vec<Ref>,
 }
 
 impl FrontMatterParsing {
@@ -59,8 +59,8 @@ impl FrontMatterParsing {
             Some(("id", suff)) => self.id = Some(suff.to_string()),
             Some(("aliases", suff)) => self.aliases = Some(suff.to_string()),
             Some(("type", suff)) => self.note_type = Some(suff.to_string()),
-            Some(("source-parents", suff)) => self.add_source_parents(suff),
-            Some(("author", suff)) => self.add_authors(suff),
+            Some(("source-parents", suff)) => self.add_source_parents(suff, lnum),
+            Some(("author", suff)) => self.add_authors(suff, lnum),
             Some(("references", suff)) => self.add_references(suff, lnum),
             Some(("tags", suff)) => self.add_tags(suff, lnum),
             Some((x, y)) => Err(MyError::ParseError(format!("Unknown field: {x}: {y}")))?,
@@ -69,18 +69,42 @@ impl FrontMatterParsing {
         Ok(())
     }
 
-    fn add_source_parents(&mut self, text: &str) {
-        if let Some(parents) =
-            Self::get_text_list(text).map(|iter| iter.map(|parent| parent.to_string()).collect())
-        {
+    fn add_source_parents(&mut self, text: &str, line: usize) {
+        let mut pos: usize = 14;
+        if let Some(parents) = Self::get_text_list(text).map(|iter| {
+            iter.map(|parent| {
+                let start = pos;
+                let end = pos + parent.len();
+                pos = end + 1;
+                Ref::new(
+                    RefNode::NoteAnchor(self.id.clone().unwrap_or("".to_string())),
+                    RefNode::NoteAnchor(parent.to_string()),
+                    RefLoc::FrontMatter(line, start, end),
+                    None,
+                )
+            })
+            .collect()
+        }) {
             self.source_parents = parents
         }
     }
 
-    fn add_authors(&mut self, text: &str) {
-        if let Some(authors) =
-            Self::get_text_list(text).map(|iter| iter.map(|author| author.to_string()).collect())
-        {
+    fn add_authors(&mut self, text: &str, line: usize) {
+        let mut pos: usize = 9;
+        if let Some(authors) = Self::get_text_list(text).map(|iter| {
+            iter.map(|author| {
+                let start = pos;
+                let end = pos + author.len();
+                pos = end + 1;
+                Ref::new(
+                    RefNode::NoteAnchor(self.id.clone().unwrap_or("".to_string())),
+                    RefNode::NoteAnchor(author.to_string()),
+                    RefLoc::FrontMatter(line, start, end),
+                    None,
+                )
+            })
+            .collect()
+        }) {
             self.author = authors
         }
     }
@@ -90,7 +114,7 @@ impl FrontMatterParsing {
         if let Some(tags) = Self::get_text_list(text).map(|iter| {
             iter.map(|tag| {
                 let start = pos;
-                let end = pos+tag.len();
+                let end = pos + tag.len();
                 pos = end + 1;
                 Ref::new(
                     RefNode::NoteAnchor(self.id.clone().unwrap_or("".to_string())),
@@ -110,7 +134,7 @@ impl FrontMatterParsing {
         if let Some(references) = Self::get_text_list(text).map(|iter| {
             iter.map(|reference| {
                 let start = pos;
-                let end = pos+reference.len();
+                let end = pos + reference.len();
                 pos = end + 1;
                 Ref::new(
                     RefNode::NoteAnchor(self.id.clone().unwrap_or("".to_string())),

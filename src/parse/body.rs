@@ -19,8 +19,8 @@ pub(crate) struct BodyParsing {
     aliases: Option<String>,
     note_type: NoteType,
     references: Vec<Ref>,
-    source_parents: Vec<String>,
-    author: Vec<String>,
+    source_parents: Vec<Ref>,
+    author: Vec<Ref>,
     headings: Vec<Anchor>,
     frontmatter_lines: usize,
 }
@@ -31,8 +31,8 @@ pub struct InterimNote {
     pub(super) note_type: NoteType,
     pub(super) tags: Vec<Ref>,
     pub(super) references: Vec<Ref>,
-    pub(super) source_parents: Vec<String>,
-    pub(super) author: Vec<String>,
+    pub(super) source_parents: Vec<Ref>,
+    pub(super) author: Vec<Ref>,
     pub(super) frontmatter_lines: usize,
     pub(super) rest: Option<LinesIter>,
 }
@@ -80,7 +80,7 @@ impl BodyParsing {
 
         Note {
             id: self.id,
-            aliases: self.aliases,
+            title: self.aliases,
             note_type: self.note_type,
             tags: self.tags,
             links: self.links,

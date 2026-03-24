@@ -12,8 +12,8 @@ use crate::{MyError, Result, file::Paths, note};
 #[derive(Serialize, Deserialize)]
 pub struct Reference {
     note_id: String,
-    to_note: String,
-    loc: String,
+    kind: String,
+    to_anchor: String,
     line: Option<usize>,
     start_col: Option<usize>,
     end_col: Option<usize>,
@@ -21,26 +21,74 @@ pub struct Reference {
 
 impl Reference {
     fn from_link(l: note::Ref) -> Result<Self> {
-        let (loc, line, start_col, end_col) = match l.loc {
+        let (kind, line, start_col, end_col) = match l.loc {
             note::RefLoc::FrontMatter(x, y, z) => {
-                ("frontmatter".to_string(), Some(x), Some(y), Some(z))
+                ("frontmatter_reference".to_string(), Some(x), Some(y), Some(z))
             }
-            note::RefLoc::Body(x, y, z) => ("body".to_string(), Some(x), Some(y), Some(z)),
+            note::RefLoc::Body(x, y, z) => ("intext_link".to_string(), Some(x), Some(y), Some(z)),
         };
 
         if let note::RefNode::NoteAnchor(note_id) = l.from
-            && let note::RefNode::NoteAnchor(to_note) = l.to
+            && let note::RefNode::NoteAnchor(to_anchor) = l.to
         {
             Ok(Self {
+                kind,
                 note_id,
-                to_note,
-                loc,
+                to_anchor,
                 line,
                 start_col,
                 end_col,
             })
         } else {
             Err(MyError::ParseError("link is weird".to_string()))
+        }
+    }
+
+    fn from_author(l: note::Ref) -> Result<Self> {
+        let (kind, line, start_col, end_col) = match l.loc {
+            note::RefLoc::FrontMatter(x, y, z) => {
+                ("author".to_string(), Some(x), Some(y), Some(z))
+            }
+            note::RefLoc::Body(x, y, z) => ("author".to_string(), Some(x), Some(y), Some(z)),
+        };
+
+        if let note::RefNode::NoteAnchor(note_id) = l.from
+            && let note::RefNode::NoteAnchor(to_anchor) = l.to
+        {
+            Ok(Self {
+                kind,
+                note_id,
+                to_anchor,
+                line,
+                start_col,
+                end_col,
+            })
+        } else {
+            Err(MyError::ParseError("author is weird".to_string()))
+        }
+    }
+
+    fn from_parent(l: note::Ref) -> Result<Self> {
+        let (kind, line, start_col, end_col) = match l.loc {
+            note::RefLoc::FrontMatter(x, y, z) => {
+                ("parent".to_string(), Some(x), Some(y), Some(z))
+            }
+            note::RefLoc::Body(x, y, z) => ("parent".to_string(), Some(x), Some(y), Some(z)),
+        };
+
+        if let note::RefNode::NoteAnchor(note_id) = l.from
+            && let note::RefNode::NoteAnchor(to_anchor) = l.to
+        {
+            Ok(Self {
+                kind,
+                note_id,
+                to_anchor,
+                line,
+                start_col,
+                end_col,
+            })
+        } else {
+            Err(MyError::ParseError("author is weird".to_string()))
         }
     }
 }
@@ -115,7 +163,7 @@ impl Note {
         Ok(Self {
             id: n.id,
             note_type: n.note_type.to_string(),
-            alias: n.aliases,
+            alias: n.title,
             lines: n.lines,
             frontmatter_lines: n.frontmatter_lines,
             path: n
@@ -336,8 +384,6 @@ impl Db {
             let mut notes: Vec<Note> = vec![];
             let mut tags: Vec<Tag> = vec![];
             let mut references: Vec<Reference> = vec![];
-            let mut parent: Vec<Parent> = vec![];
-            let mut author: Vec<Author> = vec![];
             let mut headings: Vec<Anchor> = vec![];
             let mut content: Vec<Content> = vec![];
 
@@ -352,10 +398,10 @@ impl Db {
                     content.push(Content::from_content_line(c));
                 }
                 while let Some(p) = n.source_parents.pop() {
-                    parent.push(Parent::new(p, n.id.clone()));
+                    references.push(Reference::from_parent(p)?);
                 }
                 while let Some(a) = n.author.pop() {
-                    author.push(Author::new(n.id.clone(), a));
+                    references.push(Reference::from_author(a)?);
                 }
                 while let Some(h) = n.headings.pop() {
                     headings.push(Anchor::from_heading(h));
@@ -367,8 +413,6 @@ impl Db {
 
             let mut app_notes = self.connection.appender("notes")?;
             let mut app_tags = self.connection.appender("tags")?;
-            let mut app_authors = self.connection.appender("authors")?;
-            let mut app_parents = self.connection.appender("parents")?;
             let mut app_references = self.connection.appender("refs")?;
             let mut app_contents = self.connection.appender("contents")?;
             let mut app_headings = self.connection.appender("anchors")?;
@@ -388,21 +432,17 @@ impl Db {
 
             app_notes.flush()?;
 
-            app_authors.append_rows(author.into_iter().map(|x| (x.source, x.author)))?;
-
             app_headings.append_rows(
                 headings
                     .into_iter()
                     .map(|x| (x.note_id, x.anchor_id, x.line, x.start_col, x.end_col)),
             )?;
 
-            app_parents.append_rows(parent.into_iter().map(|x| (x.parent, x.child)))?;
-
             app_references.append_rows(references.into_iter().map(|reference| {
                 (
                     reference.note_id,
-                    reference.to_note,
-                    reference.loc,
+                    reference.kind,
+                    reference.to_anchor,
                     reference.line,
                     reference.start_col,
                     reference.end_col,
@@ -426,10 +466,8 @@ impl Db {
                     .map(|content| (content.note_id, content.line_num, content.text)),
             )?;
 
-            app_authors.flush()?;
             app_tags.flush()?;
             app_references.flush()?;
-            app_parents.flush()?;
             app_contents.flush()?;
             app_headings.flush()?;
         };
@@ -476,7 +514,13 @@ impl Db {
     pub fn get_backlinks(&self, id: String) -> Result<DbValue> {
         self.run_and_return_list(
             &format!(
-                "select full_notes.*, refs.line, refs.start_col, refs.end_col from (select * from refs where refs.to_id = ?) as refs 
+                "select full_notes.*, refs.kind, refs.line, refs.start_col, refs.end_col 
+                from 
+                (
+                select *, 'back' as direction from refs where refs.to_anchor = $1
+                union all
+                select *, 'forward' as direction from refs where refs.note_id = $1
+                ) as refs 
                 inner join ({}) as full_notes on refs.note_id = full_notes.id
                 order by modified desc",
                 include_str!("../sql/notes_details.sql")
@@ -488,12 +532,8 @@ impl Db {
     pub fn get_backlinks_2(&self, id: String) -> Result<DbValue> {
         self.run_and_return_list(
             &format!(
-                "select full_notes.*, 
-                coalesce(from_refs.line) as line,
-                coalesce(from_refs.start_col) as start_col,
-                coalesce(from_refs.end_col) as end_col,
-                coalesce(source_children.type, source_parents.type, source_authors.type, author_works.type, from_refs.type, to_refs.type) as link_type,
-                from ({}) as full_notes 
+                "select full_notes.*,
+                from ({}) as full_notes
                 full join (select *, 'from_ref' as type from refs where refs.to_id = $1) as from_refs on from_refs.note_id = full_notes.id
                 full join (select *, 'to_ref' as type from refs where refs.note_id = $1) as to_refs on to_refs.to_id = full_notes.id
                 full join (select *, 'child' as type from parents where parents.parent = $1) as source_children on source_children.child = full_notes.id

@@ -8,14 +8,14 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Note {
     pub(crate) id: String,
-    pub(crate) aliases: Option<String>,
+    pub(crate) title: Option<String>,
     pub(crate) note_type: NoteType,
     pub(crate) tags: Vec<Ref>,
     pub(crate) links: Vec<Ref>,
     pub(crate) headings: Vec<Anchor>,
     pub(crate) contents: Vec<ContentLine>,
-    pub(crate) source_parents: Vec<String>,
-    pub(crate) author: Vec<String>,
+    pub(crate) source_parents: Vec<Ref>,
+    pub(crate) author: Vec<Ref>,
     pub(crate) lines: usize,
     pub(crate) frontmatter_lines: usize,
     pub(crate) path: Option<PathBuf>,
