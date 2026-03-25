@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::{fmt::Display, ops::Deref};
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -84,13 +84,15 @@ pub struct Anchor {
     pub(crate) title: String,
     pub(crate) heading_link: String,
     pub(crate) loc: RefLoc,
+    pub(crate) level: usize,
 }
 
 impl Anchor {
-    pub(crate) fn new(note_id: String, title: String, heading_link: String, loc: RefLoc) -> Self {
-        Self { note_id, title, heading_link, loc }
+    pub fn new(note_id: String, title: String, heading_link: String, loc: RefLoc, level: usize) -> Self {
+        Self { note_id, title, heading_link, loc, level }
     }
 }
+
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) enum RefNode {
@@ -104,6 +106,7 @@ pub(crate) enum RefLoc {
     FrontMatter(usize, usize, usize),
     Body(usize, usize, usize),
 }
+
 
 impl Ref {
     pub(crate) fn new(from: RefNode, to: RefNode, loc: RefLoc, alias: Option<String>) -> Self {

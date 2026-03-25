@@ -122,7 +122,7 @@ impl BodyParsing {
             self.tags.push(Ref::new(
                 RefNode::NoteAnchor(self.id.to_string()),
                 RefNode::Tag(tag.to_string()),
-                RefLoc::Body(self.line_num, r.start+1, r.end),
+                RefLoc::Body(self.line_num, r.start + 1, r.end),
                 None,
             ));
         }
@@ -137,11 +137,21 @@ impl BodyParsing {
         {
             let mut heading_link = self.id.to_string();
 
+            let level = prefix.len();
             // Possibly do heading level stuff here.. and subheading handling??
-            match prefix {
-                "#" => (),
-                _ => {
+            match level {
+                1 => (),
+                2 => {
                     heading_link.push('#');
+                    heading_link.push_str(&heading.to_string().to_note_id());
+                }
+                x => {
+                    if let Some(x) = self.parent_anchor(x).map(|x| x.heading_link) {
+                        heading_link = x;
+                        heading_link.push('_');
+                    } else {
+                        heading_link.push('#');
+                    }
                     heading_link.push_str(&heading.to_string().to_note_id());
                 }
             }
@@ -151,8 +161,16 @@ impl BodyParsing {
                 heading.to_string(),
                 heading_link,
                 RefLoc::Body(self.line_num, r.start, r.end),
+                level,
             ));
         }
+    }
+
+    fn parent_anchor(&self, level: usize) -> Option<Anchor> {
+        self.headings
+            .clone()
+            .into_iter()
+            .rfind(|x| x.level == level)
     }
 
     fn get_links(&mut self, line: &str) {

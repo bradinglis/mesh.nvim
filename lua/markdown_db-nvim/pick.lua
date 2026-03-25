@@ -9,12 +9,18 @@ local icon_dict = {
 }
 
 local link_dict = {
-  from_ref = "Referenced by",
-  to_ref = "References",
-  child = "Source Child",
-  parent = "Source Parent",
-  author = "Author",
-  source = "Source",
+  forward = {
+    intext_link = "Links to",
+    frontmatter_reference = "References",
+    author = "Author",
+    parent = "Parent",
+  },
+  back = {
+    intext_link = "Linked by",
+    frontmatter_reference = "Referenced by",
+    author = "Source",
+    parent = "Child",
+  },
 }
 
 
@@ -87,7 +93,8 @@ function M.from_notes(notes)
       ordinal = (n.title or "") .. " " .. (table.concat(n.authors, ", ") or "") .. " " .. n.id,
       title = (n.title or ""),
       author = (table.concat(n.authors, ", ") or ""),
-      link_type = n.link_type,
+      kind = n.kind,
+      direction = n.direction,
       tags = n.tags,
       icon = icon_dict[n.type] or "",
       score_add = i,
@@ -106,8 +113,8 @@ function M.from_notes(notes)
       local ret = {}
 
       ret[#ret + 1] = { set_string_width(item.icon, 2) .. " ", "Fg" }
-      if item.link_type  then
-        ret[#ret + 1] = { set_string_width(link_dict[item.link_type], 14) .. " ", "Fg" }
+      if item.kind and item.direction then
+        ret[#ret + 1] = { set_string_width(link_dict[item.direction][item.kind], 14) .. " ", "Fg" }
       end
 
       if item.author ~= "" then

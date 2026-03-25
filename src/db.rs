@@ -1,13 +1,88 @@
 use std::{
     collections::HashMap,
+    fmt::Display,
+    ops::Deref,
     path::PathBuf,
     time::{Instant, SystemTime},
+    vec,
 };
 
+use duckdb::types::FromSql;
 use duckdb::{Params, params_from_iter};
+
 use serde::{Deserialize, Serialize};
 
 use crate::{MyError, Result, file::Paths, note};
+
+pub struct Frontmatter {
+    pub(crate) id: String,
+    pub(crate) aliases: String,
+    pub(crate) note_type: String,
+    pub(crate) author: List,
+    pub(crate) source_parents: List,
+    pub(crate) references: List,
+    pub(crate) tags: List,
+}
+
+pub struct List(pub Vec<String>);
+
+impl Frontmatter {
+    pub fn to_yaml(&self) -> Vec<String> {
+        vec![
+            "---".to_string(),
+            format!("id: {}", self.id),
+            format!("aliases: {}", self.aliases),
+            format!("type: {}", self.note_type),
+            format!("author: {}", self.author),
+            format!("source-parents: {}", self.source_parents),
+            format!("references: {}", self.references),
+            format!("tags: {}", self.tags),
+            "---".to_string(),
+            format!("# {}", self.aliases),
+            "".to_string(),
+            "".to_string(),
+        ]
+    }
+}
+
+impl Display for List {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let x = match self.len() {
+            0 => "[]".to_string(),
+            _ => self.join(" "),
+        };
+        f.write_fmt(format_args!("{}", x))
+    }
+}
+
+impl FromSql for List {
+    fn column_result(value: duckdb::types::ValueRef<'_>) -> duckdb::types::FromSqlResult<Self> {
+        match value.to_owned() {
+            duckdb::types::Value::List(x) => {
+                let y: Vec<String> = x
+                    .into_iter()
+                    .filter_map(|z| {
+                        if let duckdb::types::Value::Text(a) = z {
+                            Some(a)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                Ok(List(y))
+            }
+            _ => Err(duckdb::types::FromSqlError::InvalidType),
+        }
+    }
+}
+
+impl Deref for List {
+    type Target = Vec<String>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct Reference {
@@ -22,9 +97,12 @@ pub struct Reference {
 impl Reference {
     fn from_link(l: note::Ref) -> Result<Self> {
         let (kind, line, start_col, end_col) = match l.loc {
-            note::RefLoc::FrontMatter(x, y, z) => {
-                ("frontmatter_reference".to_string(), Some(x), Some(y), Some(z))
-            }
+            note::RefLoc::FrontMatter(x, y, z) => (
+                "frontmatter_reference".to_string(),
+                Some(x),
+                Some(y),
+                Some(z),
+            ),
             note::RefLoc::Body(x, y, z) => ("intext_link".to_string(), Some(x), Some(y), Some(z)),
         };
 
@@ -46,9 +124,7 @@ impl Reference {
 
     fn from_author(l: note::Ref) -> Result<Self> {
         let (kind, line, start_col, end_col) = match l.loc {
-            note::RefLoc::FrontMatter(x, y, z) => {
-                ("author".to_string(), Some(x), Some(y), Some(z))
-            }
+            note::RefLoc::FrontMatter(x, y, z) => ("author".to_string(), Some(x), Some(y), Some(z)),
             note::RefLoc::Body(x, y, z) => ("author".to_string(), Some(x), Some(y), Some(z)),
         };
 
@@ -70,9 +146,7 @@ impl Reference {
 
     fn from_parent(l: note::Ref) -> Result<Self> {
         let (kind, line, start_col, end_col) = match l.loc {
-            note::RefLoc::FrontMatter(x, y, z) => {
-                ("parent".to_string(), Some(x), Some(y), Some(z))
-            }
+            note::RefLoc::FrontMatter(x, y, z) => ("parent".to_string(), Some(x), Some(y), Some(z)),
             note::RefLoc::Body(x, y, z) => ("parent".to_string(), Some(x), Some(y), Some(z)),
         };
 
@@ -215,7 +289,7 @@ pub struct Anchor {
 
 impl Anchor {
     pub fn from_heading(from: note::Anchor) -> Self {
-        let (loc, line, start_col, end_col) = match from.loc {
+        let (_, line, start_col, end_col) = match from.loc {
             note::RefLoc::FrontMatter(x, y, z) => {
                 ("frontmatter".to_string(), Some(x), Some(y), Some(z))
             }
@@ -491,7 +565,7 @@ impl Db {
     pub fn get_tag_notes(&self, tag: String) -> Result<DbValue> {
         self.run_and_return_list(
             &format!(
-                "select full_notes.*, tags.line, tags.start_col, tags.end_col from (select * from tags where tags.tag = ?) as tags 
+                "select full_notes.*, tags.line, tags.start_col, tags.end_col from (select * from tags where tags.tag = ?) as tags
                 inner join ({}) as full_notes on tags.note_id = full_notes.id
                 order by modified desc
                 ",
@@ -504,13 +578,13 @@ impl Db {
     pub fn get_backlinks(&self, id: String) -> Result<DbValue> {
         self.run_and_return_list(
             &format!(
-                "select full_notes.*, refs.direction, refs.kind, refs.line, refs.start_col, refs.end_col 
-                from 
+                "select full_notes.*, refs.direction, refs.kind, refs.line, refs.start_col, refs.end_col
+                from
                 (
                 select kind, line, start_col, end_col, note_id as ref, 'back' as direction from refs where refs.to_anchor = $1
                 union all
                 select kind, null as line, null as start_col, null as end_col, to_anchor as ref, 'forward' as direction from refs where refs.note_id = $1
-                ) as refs 
+                ) as refs
                 inner join ({}) as full_notes on refs.ref = full_notes.id
                 order by modified desc",
                 include_str!("../sql/notes_details.sql")
@@ -536,6 +610,38 @@ impl Db {
             ),
             [id],
         )
+    }
+
+    pub fn get_frontmatter(&self, id: &String) -> Result<Frontmatter> {
+        let mut stmt = self.connection.prepare(
+                r#"select
+                    notes.note_id as id,
+                    any_value(notes.note_title) as title,
+                    any_value(notes.note_type) as note_type,
+                    list(distinct authors.to_anchor) as authors,
+                    list(distinct parents.to_anchor) as source_parents,
+                    list(distinct f_refs.to_anchor) as references,
+                    list(distinct tags.tag) as tags
+                from notes
+                    natural left join tags 
+                    left join (select * from refs where kind = 'author') as authors on authors.note_id = notes.note_id
+                    left join (select * from refs where kind = 'parent') as parents on parents.note_id = notes.note_id
+                    left join (select * from refs where kind = 'frontmatter_reference') as f_refs on f_refs.note_id = notes.note_id
+                where id = ?
+                group by notes.note_id"#,
+        )?;
+
+        Ok(stmt.query_one([id], |row| {
+            Ok(Frontmatter {
+                id: row.get(0)?,
+                aliases: row.get(1)?,
+                note_type: row.get(2)?,
+                author: row.get(3)?,
+                source_parents: row.get(4)?,
+                references: row.get(5)?,
+                tags: row.get(6)?,
+            })
+        })?)
     }
 
     pub fn run_and_return_list<P: Params>(&self, sql: &str, params: P) -> Result<DbValue> {
@@ -600,10 +706,10 @@ impl Db {
 
     pub fn get_tag_list(&self) -> Result<DbValue> {
         self.run_and_return_list(
-            r#"select tag, 
-            count(distinct tags.note_id) as count, 
+            r#"select tag,
+            count(distinct tags.note_id) as count,
             list(distinct {'id': tags.note_id, 'line': tags.line }) as notes
-            from tags 
+            from tags
             group by tags.tag
             order by count desc"#,
             [],
@@ -614,16 +720,15 @@ impl Db {
     //     self.run_and_return_one(r#"select notes.path from notes where note_id = ?"#, [id])
     // }
 
-    pub fn get_loc(&self, id: String) -> Result<(Option<DbValue>, Option<DbValue>, Option<DbValue>)> {
+    pub fn get_loc(
+        &self,
+        id: String,
+    ) -> Result<(Option<DbValue>, Option<DbValue>, Option<DbValue>)> {
         let mut x = self.run_and_return_one(r#"select notes.path, anchors.line, anchors.start_col from anchors natural join notes where anchors.anchor_id = ?"#, [id])?;
         let c = x.pop();
         let b = x.pop();
         let a = x.pop();
-        Ok((
-            a,
-            b,
-            c,
-        ))
+        Ok((a, b, c))
     }
 
     pub fn get_notes(&self) -> Result<DbValue> {

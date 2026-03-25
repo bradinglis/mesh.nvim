@@ -70,7 +70,7 @@ impl FrontMatterParsing {
     }
 
     fn add_source_parents(&mut self, text: &str, line: usize) {
-        let mut pos: usize = 15;
+        let mut pos: usize = 16;
         if let Some(parents) = Self::get_text_list(text).map(|iter| {
             iter.map(|parent| {
                 let start = pos;
