@@ -282,6 +282,7 @@ impl Author {
 pub struct Anchor {
     note_id: String,
     anchor_id: String,
+    title: String,
     line: Option<usize>,
     start_col: Option<usize>,
     end_col: Option<usize>,
@@ -298,6 +299,7 @@ impl Anchor {
         Anchor {
             note_id: from.note_id,
             anchor_id: from.heading_link,
+            title: from.title,
             line,
             start_col,
             end_col,
@@ -499,7 +501,7 @@ impl Db {
             app_headings.append_rows(
                 headings
                     .into_iter()
-                    .map(|x| (x.note_id, x.anchor_id, x.line, x.start_col, x.end_col)),
+                    .map(|x| (x.note_id, x.anchor_id, x.title, x.line, x.start_col, x.end_col)),
             )?;
 
             app_references.append_rows(references.into_iter().map(|reference| {
@@ -735,6 +737,30 @@ impl Db {
         let x = self.run_and_return_list(include_str!("../sql/notes_details.sql"), [])?;
         // TODO: Messages
         // println!("{:?}", x);
+        Ok(x)
+    }
+
+    pub fn get_note_anchors(&self, id: String) -> Result<DbValue> {
+        let x = self.run_and_return_list(r#"
+        select 
+            anchors.anchor_id as id,
+            anchors.title as title,
+        from anchors
+        where anchors.note_id = ?
+        "#, [id])?;
+        Ok(x)
+    }
+    pub fn get_thin_notes(&self) -> Result<DbValue> {
+        let x = self.run_and_return_list(r#"
+        select 
+            notes.note_id as id,
+            notes.note_title as title,
+            notes.modified as modified,
+            notes.note_type as type,
+            notes.path as path,
+        from notes
+        order by modified desc
+        "#, [])?;
         Ok(x)
     }
 }

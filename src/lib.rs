@@ -8,6 +8,7 @@ pub mod parse;
 
 pub use db::DbValue;
 pub use mlua::prelude::*;
+use std::time::Instant;
 pub use std::{fmt::Debug, ops::Deref, path::Path};
 use thiserror::Error;
 
@@ -116,6 +117,20 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
     )?;
 
     exports.set(
+        "get_thin_notes",
+        lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
+            lua_db(lua, db_file, notes_dir, |db| db.get_thin_notes())
+        })?,
+    )?;
+
+    exports.set(
+        "get_note_anchors",
+        lua.create_function(|lua, (notes_dir, db_file, id): (String, String, String)| {
+            lua_db(lua, db_file, notes_dir, |db| db.get_note_anchors(id))
+        })?,
+    )?;
+
+    exports.set(
         "get_backlinks",
         lua.create_function(
             |lua, (notes_dir, db_file, note): (String, String, String)| {
@@ -133,30 +148,74 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
         "create_new",
         lua.create_function(
             |lua,
-             (notes_dir, db_file, title, id, parent_id, contents): (
+             (notes_dir, db_file, note_type, title, id, parent_id, contents): (
                 String,
                 String,
                 String,
                 String,
                 String,
+                Option<String>,
                 Option<Vec<String>>,
             )| {
-                lua_db_multi(lua, &db_file, &notes_dir, |db| {
-                    let parent = db.get_frontmatter(&parent_id)?;
-                    let (path, new_id) =
-                        create::create_source(parent, &id, &title, &notes_dir, contents)?;
+                lua_db_multi(lua, &db_file, &notes_dir, |db| match note_type.as_str() {
+                    "source" => {
+                        let parent = db.get_frontmatter(&parent_id.ok_or(MyError::OtherError)?)?;
+                        let (path, new_id) =
+                            create::source(parent, &id, &title, &notes_dir, contents)?;
 
-                    Ok((
-                        "note",
-                        Table(vec![
-                            ("path".to_string(), path.into_lua(lua)?),
-                            ("row".to_string(), 9.into_lua(lua)?),
-                            (
-                                "replace".to_string(),
-                                format!("[[{new_id}|{title}]]").into_lua(lua)?,
-                            ),
-                        ]),
-                    ))
+                        Ok((
+                            "note",
+                            Table(vec![
+                                ("path".to_string(), path.into_lua(lua)?),
+                                ("row".to_string(), 11.into_lua(lua)?),
+                                (
+                                    "replace".to_string(),
+                                    format!("[[{new_id}|{title}]]").into_lua(lua)?,
+                                ),
+                            ]),
+                        ))
+                    }
+                    "author" => {
+                        let (path, _) = create::author(&id, &title, &notes_dir, contents)?;
+
+                        Ok((
+                            "note",
+                            Table(vec![
+                                ("path".to_string(), path.into_lua(lua)?),
+                                ("row".to_string(), 11.into_lua(lua)?),
+                            ]),
+                        ))
+                    }
+                    "note" => {
+                        let parent = db.get_frontmatter(&parent_id.ok_or(MyError::OtherError)?)?;
+                        let parent_type = parent.note_type.clone(); 
+
+                        let (path, new_id) =
+                            create::note(parent, &id, &title, &notes_dir, contents)?;
+
+                        if parent_type == "note" {
+                            Ok((
+                                "note",
+                                Table(vec![
+                                    ("path".to_string(), path.into_lua(lua)?),
+                                    ("row".to_string(), 11.into_lua(lua)?),
+                                    (
+                                        "replace".to_string(),
+                                        format!("[[{new_id}|{title}]]").into_lua(lua)?,
+                                    ),
+                                ]),
+                            ))
+                        } else {
+                            Ok((
+                                "note",
+                                Table(vec![
+                                    ("path".to_string(), path.into_lua(lua)?),
+                                    ("row".to_string(), 11.into_lua(lua)?),
+                                ]),
+                            ))
+                        }
+                    },
+                    _ => Err(MyError::OtherError)
                 })
             },
         )?,
@@ -226,10 +285,12 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
                 usize,
             )| {
                 lua_db_multi(lua, &db_file, &notes_dir, |db| {
+                    let start = Instant::now();
                     let x = parse::parse_note(parse::LinesIter::List(content.into_iter()))?
                         .consume(None, None, None);
                     let x = x.get_ref(col, row);
 
+                    print!("Time Taken: {}s", start.elapsed().as_secs_f64());
                     Ok(match x {
                         Some(r) => match r.to {
                             RefNode::NoteAnchor(anchor) => {

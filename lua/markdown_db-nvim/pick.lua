@@ -24,7 +24,6 @@ local link_dict = {
 }
 
 
-
 local picker_opts = {
   layout = {
     layout = {
@@ -85,7 +84,6 @@ end
 
 function M.from_notes(notes)
   local i = #notes
-  dd(notes)
   local entries = vim.tbl_map(function(n)
     i = i - 1
     return {
@@ -97,7 +95,7 @@ function M.from_notes(notes)
       direction = n.direction,
       tags = n.tags,
       icon = icon_dict[n.type] or "",
-      score_add = i,
+      score_add = (i / 30),
       file = n.path,
       id = n.id,
       pos = { n.line or 0, n.start_col or 0 },
@@ -175,7 +173,7 @@ function M.from_tags(tags)
       return ret
     end,
     confirm = function(picker, item)
-      require("markdown_db-nvim").find_tag_notes(item.tag)
+      require("markdown_db-nvim.find").tag_notes(item.tag)
       picker:close()
     end,
   }

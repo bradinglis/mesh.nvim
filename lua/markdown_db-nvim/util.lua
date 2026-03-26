@@ -89,4 +89,19 @@ M.get_visual_selection = function()
   }
 end
 
+function M.try(f, callback)
+  local v1, v2, v3 = pcall(f)
+
+  if not v1 then
+    vim.notify(v2, vim.log.levels.ERROR)
+    return
+  else
+    if callback then
+      callback(v2, v3)
+    else
+      return v2, v3
+    end
+  end
+end
+
 return M

@@ -43,6 +43,7 @@ CREATE OR REPLACE TABLE refs (
 CREATE OR REPLACE TABLE anchors (
   note_id TEXT NOT NULL,
   anchor_id TEXT PRIMARY KEY NOT NULL,
+  title TEXT NOT NULL,
   line UINTEGER NULL,
   start_col UINTEGER NULL,
   end_col UINTEGER NULL,

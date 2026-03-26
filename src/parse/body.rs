@@ -146,7 +146,7 @@ impl BodyParsing {
                     heading_link.push_str(&heading.to_string().to_note_id());
                 }
                 x => {
-                    if let Some(x) = self.parent_anchor(x).map(|x| x.heading_link) {
+                    if let Some(x) = self.parent_anchor(x-1).map(|x| x.heading_link) {
                         heading_link = x;
                         heading_link.push('_');
                     } else {
@@ -208,7 +208,7 @@ impl BodyParsing {
     }
 
     fn get_reference_list(&mut self, line: &str) {
-        static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\[([0-9]+)\]: (.+)").unwrap());
+        static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\[([0-9]+)\]: (.+)").unwrap());
 
         for (r, (_, [ref_num, to_id])) in RE
             .captures_iter(line)

@@ -3,7 +3,56 @@ use crate::{MyError, Result, db::Frontmatter};
 use std::fs;
 use std::io::Write;
 
-pub fn create_source(
+pub fn author(
+    id: &String,
+    title: &String,
+    notes_dir: &String,
+    contents: Option<Vec<String>>,
+) -> Result<(String, String)> {
+
+    let id = format!("a_{}", &id);
+    let path = format!("{}/authors/{}.md", notes_dir, id);
+
+    let child = Frontmatter {
+        id: id.clone(),
+        aliases: title.to_string(),
+        note_type: "author".to_string(),
+        author: db::List(vec![]),
+        source_parents: db::List(vec![]),
+        references: db::List(vec![]),
+        tags: db::List(vec![]),
+    };
+
+    write_file(&path, child, contents)?;
+
+    Ok((path, id))
+}
+
+pub fn note(
+    parent: Frontmatter,
+    id: &String,
+    title: &String,
+    notes_dir: &String,
+    contents: Option<Vec<String>>,
+) -> Result<(String, String)> {
+
+    let path = format!("{}/notes/{}.md", notes_dir, id);
+
+    let note = Frontmatter {
+        id: id.clone(),
+        aliases: title.to_string(),
+        note_type: "note".to_string(),
+        author: db::List(vec![]),
+        source_parents: db::List(vec![]),
+        references: parent.references,
+        tags: parent.tags,
+    };
+
+    write_file(&path, note, contents)?;
+
+    Ok((path, id.to_string()))
+}
+pub fn source(
     parent: Frontmatter,
     child_id: &String,
     child_title: &String,
