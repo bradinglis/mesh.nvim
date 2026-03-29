@@ -30,13 +30,13 @@ function source:get_completions(ctx, callback)
             filterText = anchor.title .. " " .. anchor.id,
             kind = require('blink.cmp.types').CompletionItemKind.Reference,
             textEdit = {
-              newText = "[[" .. anchor.id .. "|" .. anchor.title .. "]]",
+              newText = "[[" .. anchor.id .. "$1|${2:" .. anchor.title .. "}]]$0",
               range = {
                 start = { line = ctx.bounds.line_number - 1, character = ctx.bounds.start_col - check:len() - 4 },
                 ['end'] = { line = ctx.bounds.line_number - 1, character = length + 1 },
               },
             },
-            insertTextFormat = vim.lsp.protocol.InsertTextFormat.PlainText,
+            insertTextFormat = vim.lsp.protocol.InsertTextFormat.Snippet,
           }
           table.insert(items, item)
         end

@@ -577,6 +577,17 @@ impl Db {
         )
     }
 
+    pub fn get_type_notes(&self, note_type: String) -> Result<DbValue> {
+        self.run_and_return_list(
+            &format!(
+                "select * from ({}) as full_notes where type = ? order by modified desc
+                ",
+                include_str!("../sql/notes_details.sql")
+            ),
+            [note_type],
+        )
+    }
+
     pub fn get_backlinks(&self, id: String) -> Result<DbValue> {
         self.run_and_return_list(
             &format!(

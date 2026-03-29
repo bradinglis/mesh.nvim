@@ -7,7 +7,7 @@ edition = "2024"
 crate-type = ["cdylib"]
 
 [dependencies]
-duckdb = { version = "1.10500.0" }#, features = ["bundled"] }
+duckdb = { version = "1.10500.0" , features = ["bundled"] }
 mlua = {version = "0.11", features = ["module", "luajit"]}
 rapidhash = "4.4.1"
 regex = "1.12.3"

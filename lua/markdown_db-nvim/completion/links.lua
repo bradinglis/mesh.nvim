@@ -30,7 +30,7 @@ function source:get_completions(ctx, callback)
             filterText = note.title .. " " .. note.id,
             kind = require('blink.cmp.types').CompletionItemKind.Reference,
             textEdit = {
-              newText = "[[" .. note.id .. "$1|" .. note.title .. "]]$0",
+              newText = "[[" .. note.id .. "$1|${2:" .. note.title .. "}]]$0",
               range = {
                 start = { line = ctx.bounds.line_number - 1, character = ctx.bounds.start_col - check:len() - 1 },
                 ['end'] = { line = ctx.bounds.line_number - 1, character = ctx.bounds.start_col + ctx.bounds.length + 1 },
