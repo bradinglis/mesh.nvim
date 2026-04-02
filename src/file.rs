@@ -1,4 +1,4 @@
-use serde::{Deserialize, Serialize};
+ubse serde::{Deserialize, Serialize};
 
 use crate::db::Db;
 use crate::note::Note;

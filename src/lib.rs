@@ -117,6 +117,14 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
     )?;
 
     exports.set(
+        "get_type",
+        lua.create_function(|lua, (notes_dir, db_file, note_type ): (String, String, String)| {
+            lua_db(lua, db_file, notes_dir, |db| db.get_type_notes(note_type))
+        })?,
+    )?;
+
+
+    exports.set(
         "get_thin_notes",
         lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
             lua_db(lua, db_file, notes_dir, |db| db.get_thin_notes())
@@ -143,6 +151,7 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
         "id_gen",
         lua.create_function(|lua, title: String| Ok(title.to_note_id().into_lua(lua)))?,
     )?;
+
 
     exports.set(
         "create_new",
@@ -215,6 +224,17 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
                             ))
                         }
                     },
+                    "journal" => {
+                        let (path, _) = create::journal(&notes_dir, contents)?;
+
+                        Ok((
+                            "note",
+                            Table(vec![
+                                ("path".to_string(), path.into_lua(lua)?),
+                                ("row".to_string(), 11.into_lua(lua)?),
+                            ]),
+                        ))
+                    }
                     _ => Err(MyError::OtherError)
                 })
             },

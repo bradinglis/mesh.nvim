@@ -1,7 +1,31 @@
 use crate::db;
 use crate::{MyError, Result, db::Frontmatter};
+use chrono::offset::Local;
 use std::fs;
 use std::io::Write;
+
+pub fn journal(notes_dir: &String, contents: Option<Vec<String>>) -> Result<(String, String)> {
+    let current_datetime = Local::now();
+
+    let id = format!("j_{}", current_datetime.format("%Y-%m-%d"));
+    let title = format!("Journal {}", current_datetime.format("%A %d %B %Y"));
+
+    let path = format!("{}/journals/{}.md", notes_dir, id);
+
+    let new = Frontmatter {
+        id: id.clone(),
+        aliases: title.to_string(),
+        note_type: "journal".to_string(),
+        author: None,
+        source_parents: None,
+        references: None,
+        tags: db::List(vec![]),
+    };
+
+    write_file(&path, new, contents)?;
+
+    Ok((path, id))
+}
 
 pub fn author(
     id: &String,
@@ -9,7 +33,6 @@ pub fn author(
     notes_dir: &String,
     contents: Option<Vec<String>>,
 ) -> Result<(String, String)> {
-
     let id = format!("a_{}", &id);
     let path = format!("{}/authors/{}.md", notes_dir, id);
 
@@ -17,9 +40,9 @@ pub fn author(
         id: id.clone(),
         aliases: title.to_string(),
         note_type: "author".to_string(),
-        author: db::List(vec![]),
-        source_parents: db::List(vec![]),
-        references: db::List(vec![]),
+        author: None,
+        source_parents: None,
+        references: None,
         tags: db::List(vec![]),
     };
 
@@ -35,15 +58,14 @@ pub fn note(
     notes_dir: &String,
     contents: Option<Vec<String>>,
 ) -> Result<(String, String)> {
-
     let path = format!("{}/notes/{}.md", notes_dir, id);
 
     let note = Frontmatter {
         id: id.clone(),
         aliases: title.to_string(),
         note_type: "note".to_string(),
-        author: db::List(vec![]),
-        source_parents: db::List(vec![]),
+        author: None,
+        source_parents: None,
         references: parent.references,
         tags: parent.tags,
     };
@@ -62,14 +84,15 @@ pub fn source(
     let (id, authors, source_parents) = match parent.note_type.as_str() {
         "author" => {
             let id = format!("s_{}_{}", parent.id.trim_prefix("a_"), &child_id);
-            let authors = vec![parent.id];
-            let source_parents = vec![];
+            let authors = db::List(vec![parent.id]);
+            let source_parents = db::List(vec![]);
             Ok((id, authors, source_parents))
         }
         "source" => {
             let id = format!("{}_{}", parent.id, &child_id);
-            let authors = parent.author.clone();
-            let mut source_parents = parent.source_parents.clone();
+            let authors = parent.author.unwrap_or(db::List(vec![]));
+            let mut source_parents = parent.source_parents.unwrap_or(db::List(vec![]));
+
             source_parents.push(parent.id);
 
             Ok((id, authors, source_parents))
@@ -83,8 +106,8 @@ pub fn source(
         id: id.clone(),
         aliases: child_title.to_string(),
         note_type: "source".to_string(),
-        author: db::List(authors),
-        source_parents: db::List(source_parents),
+        author: Some(authors),
+        source_parents: Some(source_parents),
         references: parent.references,
         tags: parent.tags,
     };

@@ -1,3 +1,5 @@
+use std::iter::Peekable;
+
 use crate::Result;
 use crate::parse::LinesIter;
 
@@ -13,15 +15,15 @@ pub trait FoldRest {
     //     Self: Sized,
     //     F: FnMut(C, Self::Item) -> Result<IterState<C>>;
 
-    fn for_each_rest<F>(self, f: F) -> Result<LinesIter>
+    fn for_each_rest<F>(self, f: F) -> Result<Peekable<LinesIter>>
     where
         F: FnMut(Self::Item) -> Result<IterState>;
 }
 
-impl FoldRest for LinesIter {
+impl FoldRest for Peekable<LinesIter> {
 
     type Item = Result<String>;
-    fn for_each_rest<F>(mut self, mut f: F) -> Result<LinesIter>
+    fn for_each_rest<F>(mut self, mut f: F) -> Result<Peekable<LinesIter>>
     where
         F: FnMut(Self::Item) -> Result<IterState>,
     {

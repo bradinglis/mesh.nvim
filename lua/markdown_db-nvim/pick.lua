@@ -1,4 +1,5 @@
 local snacks_picker = require "snacks.picker"
+local conf = require "markdown_db-nvim.config"
 
 local M = {}
 
@@ -6,6 +7,7 @@ local icon_dict = {
   author = "",
   note = "",
   source = "",
+  journal = "",
 }
 
 local link_dict = {
@@ -177,6 +179,49 @@ function M.from_tags(tags)
       picker:close()
     end,
   }
+  snacks_picker.pick(pick_opts)
+end
+
+function M.vault()
+  local entries = vim.iter(conf.config.vaults):map(function (k, v)
+    return {
+      text = k or v.name .. "balh",
+      dir = v.dir,
+      value = v
+    }
+  end):totable()
+
+  local pick_opts = {
+    title = "Vaults",
+    items = entries,
+    preview = "none",
+    layout = {
+      layout = {
+        backdrop = false,
+        width = 0.90,
+        min_width = 80,
+        height = 0.95,
+        border = "none",
+        box = "vertical",
+        {
+          box = "vertical",
+          border = "rounded",
+          title = "{title} {live} {flags}",
+          title_pos = "center",
+          { win = "input", height = 1,     border = "bottom" },
+          { win = "list",  border = "none" },
+        },
+      }
+    },
+    format = function(item, _)
+      return { {item.text, "Fg"} }
+    end,
+    confirm = function(picker, item)
+      conf.set_vault(item.value.name, item.value.dir)
+      picker:close()
+    end,
+  }
+
   snacks_picker.pick(pick_opts)
 end
 

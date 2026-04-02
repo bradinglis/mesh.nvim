@@ -45,6 +45,7 @@ pub(crate) enum NoteType {
     Source,
     Author,
     Note,
+    Journal,
 }
 
 impl NoteType {
@@ -53,6 +54,7 @@ impl NoteType {
             "author" => Ok(Self::Author),
             "source" => Ok(Self::Source),
             "note" => Ok(Self::Note),
+            "journal" => Ok(Self::Journal),
             _ => Err(MyError::ParseError("note type unknown".to_string())),
         }
     }
@@ -64,6 +66,7 @@ impl Display for NoteType {
             NoteType::Source => "source".to_string(),
             NoteType::Author => "author".to_string(),
             NoteType::Note => "note".to_string(),
+            NoteType::Journal => "journal".to_string(),
         };
 
         f.write_fmt(format_args!("{}", x))

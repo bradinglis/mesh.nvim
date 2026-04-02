@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fmt::Display,
-    ops::Deref,
+    ops::{Deref, DerefMut},
     path::PathBuf,
     time::{Instant, SystemTime},
     vec,
@@ -18,9 +18,9 @@ pub struct Frontmatter {
     pub(crate) id: String,
     pub(crate) aliases: String,
     pub(crate) note_type: String,
-    pub(crate) author: List,
-    pub(crate) source_parents: List,
-    pub(crate) references: List,
+    pub(crate) author: Option<List>,
+    pub(crate) source_parents: Option<List>,
+    pub(crate) references: Option<List>,
     pub(crate) tags: List,
 }
 
@@ -28,20 +28,27 @@ pub struct List(pub Vec<String>);
 
 impl Frontmatter {
     pub fn to_yaml(&self) -> Vec<String> {
-        vec![
-            "---".to_string(),
-            format!("id: {}", self.id),
-            format!("aliases: {}", self.aliases),
-            format!("type: {}", self.note_type),
-            format!("author: {}", self.author),
-            format!("source-parents: {}", self.source_parents),
-            format!("references: {}", self.references),
-            format!("tags: {}", self.tags),
-            "---".to_string(),
-            format!("# {}", self.aliases),
-            "".to_string(),
-            "".to_string(),
-        ]
+        let mut res: Vec<String> = Vec::new();
+        res.push("---".to_string());
+        res.push(format!("id: {}", self.id));
+        res.push(format!("aliases: {}", self.aliases));
+        res.push(format!("type: {}", self.note_type));
+        if let Some(author) = &self.author {
+            res.push(format!("author: {}", author));
+        }
+        if let Some(source_parents) = &self.source_parents {
+            res.push(format!("source-parents: {}", source_parents));
+        }
+        if let Some(author) = &self.references {
+            res.push(format!("references: {}", author));
+        }
+        res.push(format!("tags: {}", self.tags));
+        res.push("---".to_string());
+        res.push(format!("# {}", self.aliases));
+        res.push("".to_string());
+        res.push("".to_string());
+        
+        res
     }
 }
 
@@ -83,6 +90,13 @@ impl Deref for List {
         &self.0
     }
 }
+
+impl DerefMut for List {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
 
 #[derive(Serialize, Deserialize)]
 pub struct Reference {
@@ -498,11 +512,16 @@ impl Db {
 
             app_notes.flush()?;
 
-            app_headings.append_rows(
-                headings
-                    .into_iter()
-                    .map(|x| (x.note_id, x.anchor_id, x.title, x.line, x.start_col, x.end_col)),
-            )?;
+            app_headings.append_rows(headings.into_iter().map(|x| {
+                (
+                    x.note_id,
+                    x.anchor_id,
+                    x.title,
+                    x.line,
+                    x.start_col,
+                    x.end_col,
+                )
+            }))?;
 
             app_references.append_rows(references.into_iter().map(|reference| {
                 (
@@ -752,17 +771,21 @@ impl Db {
     }
 
     pub fn get_note_anchors(&self, id: String) -> Result<DbValue> {
-        let x = self.run_and_return_list(r#"
+        let x = self.run_and_return_list(
+            r#"
         select 
             anchors.anchor_id as id,
             anchors.title as title,
         from anchors
         where anchors.note_id = ?
-        "#, [id])?;
+        "#,
+            [id],
+        )?;
         Ok(x)
     }
     pub fn get_thin_notes(&self) -> Result<DbValue> {
-        let x = self.run_and_return_list(r#"
+        let x = self.run_and_return_list(
+            r#"
         select 
             notes.note_id as id,
             notes.note_title as title,
@@ -771,7 +794,9 @@ impl Db {
             notes.path as path,
         from notes
         order by modified desc
-        "#, [])?;
+        "#,
+            [],
+        )?;
         Ok(x)
     }
 }

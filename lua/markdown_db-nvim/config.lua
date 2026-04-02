@@ -31,12 +31,19 @@ function M.set_opts(opts)
   vim.fn.mkdir(db_root, "p")
 
   if type(M.config.vaults.default) == "string" then
-    M.current_vault.name = M.config.vaults[M.config.vaults.default].name
-    M.current_vault.dir = vim.fs.abspath(M.config.vaults[M.config.vaults.default].dir)
+    M.set_vault(M.config.vaults[M.config.vaults.default].name,M.config.vaults[M.config.vaults.default].dir)
   elseif type(M.config.vaults.default) == "table" then
     M.current_vault.name = M.config.vaults.default.name
     M.current_vault.dir = vim.fs.abspath(M.config.vaults.default.dir)
   end
+  M.current_vault.db = db_root .. "/" .. M.current_vault.name .. ".duckdb"
+end
+
+function M.set_vault(name, dir)
+  M.current_vault.name = name
+  M.current_vault.dir = vim.fs.abspath(dir)
+
+  local db_root = util.get_paths().data_dir
   M.current_vault.db = db_root .. "/" .. M.current_vault.name .. ".duckdb"
 end
 

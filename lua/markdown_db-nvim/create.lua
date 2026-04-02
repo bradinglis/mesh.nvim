@@ -58,6 +58,11 @@ function M.author()
   create({ type = "author" })
 end
 
+function M.journal()
+  -- local current_buf = vim.api.nvim_get_current_buf()
+  create({ type = "journal" })
+end
+
 function M.note()
   local current_buf = vim.api.nvim_get_current_buf()
   local parent_id = vim.split(vim.fs.basename(vim.api.nvim_buf_get_name(current_buf)), "%.")[1]

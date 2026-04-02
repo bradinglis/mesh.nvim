@@ -22,8 +22,12 @@ impl Iterator for LinesIter {
 }
 
 pub(crate) fn parse_note(mut lines: LinesIter) -> Result<body::BodyParsing> {
+    // Make implementation of Note
+    // Optional frontmatter component, passed back from FrontMatterParsing (with `rest`).
+    // Body component passed back from BodyParsing should then be combined with FrontMatterParsing
+    // to create Note struct.
     if let Some(Ok(l)) = lines.next() && l.as_str() == "---" {
-        let x = frontmatter::FrontMatterParsing::parse(lines)?;
+        let x = frontmatter::FrontMatter::parse(lines)?;
         let (mut x, iter) = body::BodyParsing::init(x)?;
         x.parse_lines(iter);
         Ok(x)
