@@ -1,3 +1,6 @@
+-- TODO: copy fff rust handling 
+-- https://github.com/dmtrKovalenko/fff.nvim/blob/main/lua/fff/rust/init.lua
+-- https://github.com/dmtrKovalenko/fff.nvim/blob/main/lua/fff/download.lua
 local util = require("markdown_db-nvim.util")
 
 local function get_platform()
@@ -20,7 +23,6 @@ end
 local bin = {}
 
 local get = function()
-  dd("hi")
   if vim.tbl_isempty(bin) then
     local platform, ext = get_platform()
     local paths = util.get_paths()

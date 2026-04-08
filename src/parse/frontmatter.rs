@@ -6,25 +6,24 @@ use crate::MyError;
 use crate::Result;
 use crate::fold_rest::{FoldRest, IterState};
 use crate::note::{NoteType, Ref, RefLoc, RefNode};
-use crate::parse::LinesIter;
-use crate::parse::body::InterimNote;
+use crate::parse::Lines;
 
 #[derive(Debug)]
 pub(crate) struct FrontMatter {
-    id: Option<String>,
-    aliases: Option<String>,
-    note_type: Option<String>,
-    tags: Vec<Ref>,
-    references: Vec<Ref>,
-    source_parents: Vec<Ref>,
-    author: Vec<Ref>,
-    lines: usize,
+    pub(crate) id: Option<String>,
+    pub(crate) aliases: Option<String>,
+    pub(crate) note_type: Option<String>,
+    pub(crate) tags: Vec<Ref>,
+    pub(crate) references: Vec<Ref>,
+    pub(crate) source_parents: Vec<Ref>,
+    pub(crate) author: Vec<Ref>,
+    pub(crate) lines: usize,
 }
 
 impl FrontMatter {
-    pub fn parse(iter: LinesIter) -> Result<(Option<FrontMatter>, Peekable<LinesIter>)> {
-        let mut iter = iter.peekable();
+    pub fn parse(mut iter: Lines) -> Result<(Option<FrontMatter>, Lines)> {
         if let Some(Ok(l)) = iter.peek() && l == "---" {
+            let _ = iter.next();
             let mut new = Self::new();
             let rest = iter.for_each_rest(|x| {
                 let line = x?;
@@ -32,12 +31,12 @@ impl FrontMatter {
                 match line.as_str() {
                     "---" => Ok(IterState::Break),
                     _ => {
-                        new.add_line_to_frontmatter(line, new.lines)?;
+                        let _ = new.add_line_to_frontmatter(line, new.lines);
                         Ok(IterState::Continue)
                     }
                 }
             })?;
-            Ok((None, iter))
+            Ok((Some(new), rest))
         } else {
             Ok((None, iter))
         }
@@ -84,7 +83,7 @@ impl FrontMatter {
                 let end = pos + parent.len();
                 pos = end + 1;
                 Ref::new(
-                    RefNode::NoteAnchor(self.id.clone().unwrap_or("".to_string())),
+                    Some(RefNode::NoteAnchor(self.id.clone().unwrap_or("".to_string()))),
                     RefNode::NoteAnchor(parent.to_string()),
                     RefLoc::FrontMatter(line, start, end),
                     None,
@@ -104,7 +103,7 @@ impl FrontMatter {
                 let end = pos + author.len();
                 pos = end + 1;
                 Ref::new(
-                    RefNode::NoteAnchor(self.id.clone().unwrap_or("".to_string())),
+                    Some(RefNode::NoteAnchor(self.id.clone().unwrap_or("".to_string()))),
                     RefNode::NoteAnchor(author.to_string()),
                     RefLoc::FrontMatter(line, start, end),
                     None,
@@ -124,7 +123,7 @@ impl FrontMatter {
                 let end = pos + tag.len();
                 pos = end + 1;
                 Ref::new(
-                    RefNode::NoteAnchor(self.id.clone().unwrap_or("".to_string())),
+                    Some(RefNode::NoteAnchor(self.id.clone().unwrap_or("".to_string()))),
                     RefNode::Tag(tag.to_string()),
                     RefLoc::FrontMatter(line, start, end),
                     None,
@@ -144,7 +143,7 @@ impl FrontMatter {
                 let end = pos + reference.len();
                 pos = end + 1;
                 Ref::new(
-                    RefNode::NoteAnchor(self.id.clone().unwrap_or("".to_string())),
+                    Some(RefNode::NoteAnchor(self.id.clone().unwrap_or("".to_string()))),
                     RefNode::NoteAnchor(reference.to_string()),
                     RefLoc::FrontMatter(line, start, end),
                     None,

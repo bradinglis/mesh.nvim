@@ -39,11 +39,8 @@ M.setup = function(opts)
 end
 
 M.update = function()
-  util.try(function()
+  require("markdown_db-nvim.rfun").try(function()
       return bin.update_index(config.current_vault.dir, config.current_vault.db)
-    end,
-    function(v)
-      vim.notify(v, vim.log.levels.INFO)
     end
   )
 end

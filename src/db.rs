@@ -47,7 +47,7 @@ impl Frontmatter {
         res.push(format!("# {}", self.aliases));
         res.push("".to_string());
         res.push("".to_string());
-        
+
         res
     }
 }
@@ -97,7 +97,6 @@ impl DerefMut for List {
     }
 }
 
-
 #[derive(Serialize, Deserialize)]
 pub struct Reference {
     note_id: String,
@@ -120,7 +119,8 @@ impl Reference {
             note::RefLoc::Body(x, y, z) => ("intext_link".to_string(), Some(x), Some(y), Some(z)),
         };
 
-        if let note::RefNode::NoteAnchor(note_id) = l.from
+        let from = l.from.clone();
+        if let Some(note::RefNode::NoteAnchor(note_id)) = l.from
             && let note::RefNode::NoteAnchor(to_anchor) = l.to
         {
             Ok(Self {
@@ -132,7 +132,7 @@ impl Reference {
                 end_col,
             })
         } else {
-            Err(MyError::ParseError("link is weird".to_string()))
+            Err(MyError::ParseError(format!("Link is weird: {:?}, {:?}, {:?}, {:?}, {:?}", from, kind, line, start_col, end_col)))
         }
     }
 
@@ -142,7 +142,7 @@ impl Reference {
             note::RefLoc::Body(x, y, z) => ("author".to_string(), Some(x), Some(y), Some(z)),
         };
 
-        if let note::RefNode::NoteAnchor(note_id) = l.from
+        if let Some(note::RefNode::NoteAnchor(note_id)) = l.from
             && let note::RefNode::NoteAnchor(to_anchor) = l.to
         {
             Ok(Self {
@@ -164,7 +164,7 @@ impl Reference {
             note::RefLoc::Body(x, y, z) => ("parent".to_string(), Some(x), Some(y), Some(z)),
         };
 
-        if let note::RefNode::NoteAnchor(note_id) = l.from
+        if let Some(note::RefNode::NoteAnchor(note_id)) = l.from
             && let note::RefNode::NoteAnchor(to_anchor) = l.to
         {
             Ok(Self {
@@ -200,7 +200,7 @@ impl Tag {
             note::RefLoc::Body(x, y, z) => ("body".to_string(), Some(x), Some(y), Some(z)),
         };
 
-        if let note::RefNode::NoteAnchor(note_id) = r.from
+        if let Some(note::RefNode::NoteAnchor(note_id)) = r.from
             && let note::RefNode::Tag(tag) = r.to
         {
             Ok(Self {
@@ -225,12 +225,12 @@ pub struct Content {
 }
 
 impl Content {
-    fn from_content_line(c: note::ContentLine) -> Self {
-        Self {
-            note_id: c.note_id,
+    fn from_content_line(c: note::ContentLine) -> Result<Self> {
+        Ok(Self {
+            note_id: c.note_id.ok_or(MyError::OtherError)?,
             text: c.text,
             line_num: c.line_num,
-        }
+        })
     }
 }
 
@@ -249,7 +249,7 @@ pub struct Note {
 impl Note {
     fn from_note(n: note::Note) -> Result<Self> {
         Ok(Self {
-            id: n.id,
+            id: n.id.ok_or(MyError::OtherError)?,
             note_type: n.note_type.to_string(),
             alias: n.title,
             lines: n.lines,
@@ -303,21 +303,21 @@ pub struct Anchor {
 }
 
 impl Anchor {
-    pub fn from_heading(from: note::Anchor) -> Self {
+    pub fn from_heading(from: note::Anchor) -> Result<Self> {
         let (_, line, start_col, end_col) = match from.loc {
             note::RefLoc::FrontMatter(x, y, z) => {
                 ("frontmatter".to_string(), Some(x), Some(y), Some(z))
             }
             note::RefLoc::Body(x, y, z) => ("body".to_string(), Some(x), Some(y), Some(z)),
         };
-        Anchor {
-            note_id: from.note_id,
+        Ok(Anchor {
+            note_id: from.note_id.ok_or(MyError::OtherError)?,
             anchor_id: from.heading_link,
             title: from.title,
             line,
             start_col,
             end_col,
-        }
+        })
     }
 }
 
@@ -386,6 +386,7 @@ impl DbValue {
 pub struct Db {
     pub(crate) connection: duckdb::Connection,
     pub(crate) notes_path: PathBuf,
+    pub(crate) errors: Vec<MyError>,
     // pub(crate) db_path: PathBuf,
 }
 
@@ -395,6 +396,7 @@ impl Db {
             connection: duckdb::Connection::open(db_path)?,
             // db_path: db_path.to_path_buf(),
             notes_path: notes_dir.to_path_buf(),
+            errors: vec![],
         };
 
         if db
@@ -416,6 +418,7 @@ impl Db {
         Ok(db)
     }
 
+    // Want this to return error as tuple/struct
     pub fn process_files(&self) -> Result<String> {
         let start = Instant::now();
 
@@ -467,7 +470,8 @@ impl Db {
             let mut headings: Vec<Anchor> = vec![];
             let mut content: Vec<Content> = vec![];
 
-            while let Some(mut n) = to_add.pop() {
+            // TODO: this properly
+            let x: Vec<Result<()>> = to_add.into_iter().map(|mut n| -> Result<()> {
                 while let Some(t) = n.tags.pop() {
                     tags.push(Tag::from_tag(t)?);
                 }
@@ -475,7 +479,9 @@ impl Db {
                     references.push(Reference::from_link(r)?);
                 }
                 while let Some(c) = n.contents.pop() {
-                    content.push(Content::from_content_line(c));
+                    if let Ok(l) = Content::from_content_line(c) {
+                        content.push(l);
+                    }
                 }
                 while let Some(p) = n.source_parents.pop() {
                     references.push(Reference::from_parent(p)?);
@@ -484,12 +490,16 @@ impl Db {
                     references.push(Reference::from_author(a)?);
                 }
                 while let Some(h) = n.headings.pop() {
-                    headings.push(Anchor::from_heading(h));
+                    if let Ok(a) = Anchor::from_heading(h) {
+                        headings.push(a)
+                    }
                 }
                 if let Ok(note) = Note::from_note(n) {
                     notes.push(note);
                 }
-            }
+
+                Ok(())
+            }).collect();
 
             let mut app_notes = self.connection.appender("notes")?;
             let mut app_tags = self.connection.appender("tags")?;

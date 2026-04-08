@@ -1,4 +1,4 @@
-use std::{fmt::Display, ops::Deref};
+use std::fmt::Display;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Note {
-    pub(crate) id: String,
+    pub(crate) id: Option<String>,
     pub(crate) title: Option<String>,
     pub(crate) note_type: NoteType,
     pub(crate) tags: Vec<Ref>,
@@ -25,13 +25,13 @@ pub(crate) struct Note {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct ContentLine {
-    pub(crate) note_id: String,
+    pub(crate) note_id: Option<String>,
     pub(crate) text: String,
     pub(crate) line_num: usize,
 }
 
 impl ContentLine {
-    pub(crate) fn new(text: String, line_num: usize, note_id: String) -> Self {
+    pub(crate) fn new(text: String, line_num: usize, note_id: Option<String>) -> Self {
         Self {
             text,
             line_num,
@@ -46,16 +46,17 @@ pub(crate) enum NoteType {
     Author,
     Note,
     Journal,
+    None,
 }
 
 impl NoteType {
-    pub fn from_string(s: String) -> Result<Self> {
+    pub fn from_string(s: String) -> Self {
         match s.as_str() {
-            "author" => Ok(Self::Author),
-            "source" => Ok(Self::Source),
-            "note" => Ok(Self::Note),
-            "journal" => Ok(Self::Journal),
-            _ => Err(MyError::ParseError("note type unknown".to_string())),
+            "author" => Self::Author,
+            "source" => Self::Source,
+            "note" => Self::Note,
+            "journal" => Self::Journal,
+            _ => Self::None,
         }
     }
 }
@@ -67,6 +68,7 @@ impl Display for NoteType {
             NoteType::Author => "author".to_string(),
             NoteType::Note => "note".to_string(),
             NoteType::Journal => "journal".to_string(),
+            NoteType::None => "none".to_string(),
         };
 
         f.write_fmt(format_args!("{}", x))
@@ -75,7 +77,7 @@ impl Display for NoteType {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) struct Ref {
-    pub(crate) from: RefNode,
+    pub(crate) from: Option<RefNode>,
     pub(crate) to: RefNode,
     pub(crate) loc: RefLoc,
     pub(crate) alias: Option<String>,
@@ -83,7 +85,7 @@ pub(crate) struct Ref {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Anchor {
-    pub(crate) note_id: String,
+    pub(crate) note_id: Option<String>,
     pub(crate) title: String,
     pub(crate) heading_link: String,
     pub(crate) loc: RefLoc,
@@ -91,11 +93,22 @@ pub struct Anchor {
 }
 
 impl Anchor {
-    pub fn new(note_id: String, title: String, heading_link: String, loc: RefLoc, level: usize) -> Self {
-        Self { note_id, title, heading_link, loc, level }
+    pub fn new(
+        note_id: Option<String>,
+        title: String,
+        heading_link: String,
+        loc: RefLoc,
+        level: usize,
+    ) -> Self {
+        Self {
+            note_id,
+            title,
+            heading_link,
+            loc,
+            level,
+        }
     }
 }
-
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub(crate) enum RefNode {
@@ -110,9 +123,13 @@ pub(crate) enum RefLoc {
     Body(usize, usize, usize),
 }
 
-
 impl Ref {
-    pub(crate) fn new(from: RefNode, to: RefNode, loc: RefLoc, alias: Option<String>) -> Self {
+    pub(crate) fn new(
+        from: Option<RefNode>,
+        to: RefNode,
+        loc: RefLoc,
+        alias: Option<String>,
+    ) -> Self {
         Self {
             from,
             to,
@@ -130,13 +147,12 @@ impl Ref {
     }
 
     pub fn key(&self) -> usize {
-        match self.from {
-            RefNode::NoteAnchor(_) => 999,
-            RefNode::Tag(_) => 999,
-            RefNode::Local(x) => x,
+        if let Some(RefNode::Local(x)) = self.from {
+            x
+        } else {
+            999
         }
     }
-
 }
 
 impl Note {
@@ -150,6 +166,12 @@ impl Note {
             let (x, y, z) = r.loc.clone().get_loc();
             (x == col) && (y <= row) && (z >= row)
         })
+    }
+    pub fn add_file_data(mut self, path: PathBuf, hash: u64, modified: SystemTime) -> Self {
+        self.path = Some(path);
+        self.hash = Some(hash);
+        self.modified = Some(modified);
+        self
     }
 }
 

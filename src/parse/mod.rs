@@ -1,13 +1,16 @@
-use std::{fs, io};
 use crate::Result;
+use crate::note;
+use std::{fs, io, iter::Peekable};
 
 pub(crate) mod body;
 pub(crate) mod frontmatter;
 
 // type LinesIter = io::Lines<io::BufReader<fs::File>>;
+pub type Lines = Peekable<LinesIter>;
+
 pub enum LinesIter {
     File(io::Lines<io::BufReader<fs::File>>),
-    List(std::vec::IntoIter<String>)
+    List(std::vec::IntoIter<String>),
 }
 
 impl Iterator for LinesIter {
@@ -21,19 +24,10 @@ impl Iterator for LinesIter {
     }
 }
 
-pub(crate) fn parse_note(mut lines: LinesIter) -> Result<body::BodyParsing> {
-    // Make implementation of Note
-    // Optional frontmatter component, passed back from FrontMatterParsing (with `rest`).
-    // Body component passed back from BodyParsing should then be combined with FrontMatterParsing
-    // to create Note struct.
-    if let Some(Ok(l)) = lines.next() && l.as_str() == "---" {
-        let x = frontmatter::FrontMatter::parse(lines)?;
-        let (mut x, iter) = body::BodyParsing::init(x)?;
-        x.parse_lines(iter);
-        Ok(x)
-        // Ok(x.consume(hash, modified))
-    } else {
-        Err(crate::MyError::ParseError("No frontmatter".to_string()))
-    }
+pub(crate) fn parse_note(lines: LinesIter) -> Result<note::Note> {
+    let lines: Lines = lines.peekable();
+    let (x, y) = frontmatter::FrontMatter::parse(lines)?;
+    Ok(body::BodyParsing::init(x)?
+        .parse_lines(y)
+        .consume())
 }
-

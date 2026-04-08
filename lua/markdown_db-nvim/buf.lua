@@ -8,27 +8,33 @@ M.highlights = function()
   local current_buf = vim.api.nvim_get_current_buf()
   local lines = vim.api.nvim_buf_get_lines(current_buf, 0, -1, false)
 
-  util.try(function()
-      return bin.get_highlights(lines)
-    end,
-    function(highlights)
-      local ns_id = vim.api.nvim_create_namespace("markdown_db")
-      vim.api.nvim_buf_clear_namespace(current_buf, ns_id, 0, -1)
+  require("markdown_db-nvim.rfun").try(function()
+    -- return bin.cursor_action(config.current_vault.dir, config.current_vault.db, lines, row, col)
+    return bin.get_highlights(lines)
+  end)
 
-      for _, v in ipairs(highlights) do
-        vim.api.nvim_buf_set_extmark(
-          current_buf,
-          ns_id,
-          v.line - 1,
-          v.start_col,
-          {
-            end_row = v.line - 1, -- End line (same as start for single line)
-            end_col = v.end_col,  -- End column (highlights characters from col 0 to 4)
-            hl_group = v.hl,      -- The highlight group to use
-          })
-      end
-    end
-  )
+  -- util.try(function()
+  --     return bin.get_highlights(lines)
+  --   end,
+  --   function(highlights)
+  --     dd(highlights)
+  --     local ns_id = vim.api.nvim_create_namespace("markdown_db")
+  --     vim.api.nvim_buf_clear_namespace(current_buf, ns_id, 0, -1)
+  --
+  --     for _, v in ipairs(highlights) do
+  --       vim.api.nvim_buf_set_extmark(
+  --         current_buf,
+  --         ns_id,
+  --         v.line - 1,
+  --         v.start_col,
+  --         {
+  --           end_row = v.line - 1, -- End line (same as start for single line)
+  --           end_col = v.end_col,  -- End column (highlights characters from col 0 to 4)
+  --           hl_group = v.hl,      -- The highlight group to use
+  --         })
+  --     end
+  --   end
+  -- )
 end
 
 M.open = function(opts, viz)

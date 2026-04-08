@@ -1,4 +1,4 @@
-use crate::parse::LinesIter;
+use crate::parse::{Lines, frontmatter::FrontMatter};
 use std::path::PathBuf;
 use std::time::SystemTime;
 
@@ -9,99 +9,96 @@ use std::sync::LazyLock;
 use crate::note::{Anchor, ContentLine, Note, NoteType, Ref, RefLoc, RefNode};
 
 pub(crate) struct BodyParsing {
-    id: String,
+    id: Option<String>,
+    frontmatter: Option<FrontMatter>,
     contents: Vec<ContentLine>,
     tags: Vec<Ref>,
     links: Vec<Ref>,
     refs: Vec<Ref>,
     ref_list: Vec<Ref>,
-    line_num: usize,
-    aliases: Option<String>,
-    note_type: NoteType,
-    references: Vec<Ref>,
-    source_parents: Vec<Ref>,
-    author: Vec<Ref>,
     headings: Vec<Anchor>,
-    frontmatter_lines: usize,
-}
-
-pub struct InterimNote {
-    pub(super) id: String,
-    pub(super) aliases: Option<String>,
-    pub(super) note_type: NoteType,
-    pub(super) tags: Vec<Ref>,
-    pub(super) references: Vec<Ref>,
-    pub(super) source_parents: Vec<Ref>,
-    pub(super) author: Vec<Ref>,
-    pub(super) frontmatter_lines: usize,
-    pub(super) rest: Option<LinesIter>,
+    line_num: usize,
 }
 
 impl BodyParsing {
-    pub(crate) fn init(note: InterimNote) -> Result<(Self, LinesIter)> {
-        let rest = note
-            .rest
-            .ok_or(MyError::ParseError("reader not working".to_string()))?;
-        Ok((
-            BodyParsing {
-                id: note.id,
-                contents: vec![],
-                tags: note.tags,
-                links: vec![],
-                line_num: note.frontmatter_lines,
-                aliases: note.aliases,
-                note_type: note.note_type,
-                refs: vec![],
-                headings: vec![],
-                ref_list: vec![],
-                references: note.references,
-                source_parents: note.source_parents,
-                author: note.author,
-                frontmatter_lines: note.frontmatter_lines,
-            },
-            rest,
-        ))
+    pub(crate) fn init(note: Option<FrontMatter>) -> Result<Self> {
+        let line_num = note.as_ref().map_or(1, |x| x.lines);
+        Ok(BodyParsing {
+            id: note.as_ref().and_then(|n| n.id.to_owned()),
+            frontmatter: note,
+            contents: vec![],
+            tags: vec![],
+            links: vec![],
+            refs: vec![],
+            ref_list: vec![],
+            headings: vec![],
+            line_num,
+        })
     }
 
     pub(crate) fn consume(
         mut self,
-        path: Option<PathBuf>,
-        hash: Option<u64>,
-        modified: Option<SystemTime>,
     ) -> Note {
+        let mut links = self.links;
         self.ref_list.sort_by_key(|x| x.key());
 
         self.refs.into_iter().for_each(|x| {
             let x = x.instantiate_intext(&self.ref_list);
-            self.links.push(x);
+            links.push(x);
         });
 
-        self.links.append(&mut self.references);
+        match self.frontmatter {
+            Some(f) => {
+                let mut tags = self.tags;
+                tags.append(&mut f.tags.clone());
+                links.append(&mut f.references.clone());
 
-        Note {
-            id: self.id,
-            title: self.aliases,
-            note_type: self.note_type,
-            tags: self.tags,
-            links: self.links,
-            contents: self.contents,
-            source_parents: self.source_parents,
-            author: self.author,
-            lines: self.line_num,
-            headings: self.headings,
-            frontmatter_lines: self.frontmatter_lines,
-            path,
-            hash,
-            modified,
+                Note {
+                    id: self.id,
+                    title: f.aliases,
+                    note_type: f.note_type.map_or(NoteType::None, NoteType::from_string),
+                    tags,
+                    links,
+                    contents: self.contents,
+                    source_parents: f.source_parents,
+                    author: f.author,
+                    lines: self.line_num,
+                    headings: self.headings,
+                    frontmatter_lines: f.lines,
+                    path: None,
+                    hash: None,
+                    modified: None,
+                }
+            },
+            None => {
+                Note {
+                    id: self.id,
+                    title: None,
+                    note_type: NoteType::None,
+                    tags: self.tags,
+                    links,
+                    contents: self.contents,
+                    source_parents: vec![],
+                    author: vec![],
+                    lines: self.line_num,
+                    headings: self.headings,
+                    frontmatter_lines: 0,
+                    path: None,
+                    hash: None,
+                    modified: None,
+                }
+            },
         }
     }
 
-    pub(crate) fn parse_lines(&mut self, rest: LinesIter) {
+    pub(crate) fn parse_lines(mut self, rest: Lines) -> Self {
         rest.for_each(|x| self.parse_line(x));
+        self
     }
 
     fn parse_line(&mut self, text: Result<String>) {
         let text = text.unwrap_or("".to_string());
+        self.line_num += 1;
         self.get_tags(&text);
         self.get_links(&text);
         self.get_reference_intext(&text);
@@ -109,7 +106,6 @@ impl BodyParsing {
         self.get_headings(&text);
         self.contents
             .push(ContentLine::new(text, self.line_num, self.id.clone()));
-        self.line_num += 1;
     }
 
     fn get_tags(&mut self, line: &str) {
@@ -120,7 +116,7 @@ impl BodyParsing {
             .map(|c| (c.get_match().range(), c.extract()))
         {
             self.tags.push(Ref::new(
-                RefNode::NoteAnchor(self.id.to_string()),
+                self.id.clone().map(RefNode::NoteAnchor),
                 RefNode::Tag(tag.to_string()),
                 RefLoc::Body(self.line_num, r.start + 1, r.end),
                 None,
@@ -135,18 +131,30 @@ impl BodyParsing {
             .captures_iter(line)
             .map(|c| (c.get_match().range(), c.extract()))
         {
-            let mut heading_link = self.id.to_string();
+            let mut heading_link = String::new();
 
             let level = prefix.len();
             // Possibly do heading level stuff here.. and subheading handling??
             match level {
-                1 => (),
+                1 => {
+                    if let Some(x) = self.id.clone() {
+                        heading_link.push_str(x.as_str());
+                    } else {
+
+                        heading_link.push_str(&heading.to_string().to_note_id());
+                    }
+                },
                 2 => {
-                    heading_link.push('#');
+                    if let Some(x) = self.parent_anchor(1).map(|x| x.heading_link) {
+                        heading_link = x;
+                        heading_link.push('_');
+                    } else {
+                        heading_link.push('#');
+                    }
                     heading_link.push_str(&heading.to_string().to_note_id());
-                }
+                },
                 x => {
-                    if let Some(x) = self.parent_anchor(x-1).map(|x| x.heading_link) {
+                    if let Some(x) = self.parent_anchor(x - 1).map(|x| x.heading_link) {
                         heading_link = x;
                         heading_link.push('_');
                     } else {
@@ -157,7 +165,7 @@ impl BodyParsing {
             }
 
             self.headings.push(Anchor::new(
-                self.id.to_string(),
+                self.id.to_owned(),
                 heading.to_string(),
                 heading_link,
                 RefLoc::Body(self.line_num, r.start, r.end),
@@ -182,8 +190,8 @@ impl BodyParsing {
             .map(|c| (c.get_match().range(), c.extract()))
         {
             self.links.push(Ref::new(
-                RefNode::NoteAnchor(self.id.to_string()),
-                RefNode::NoteAnchor(to_id.to_string()),
+                self.id.clone().map(RefNode::NoteAnchor),
+                RefNode::NoteAnchor(to_id.to_owned()),
                 RefLoc::Body(self.line_num, r.start, r.end),
                 Some(title.to_string()),
             ));
@@ -199,7 +207,7 @@ impl BodyParsing {
             .map(|c| (c.get_match().range(), c.extract()))
         {
             self.refs.push(Ref::new(
-                RefNode::NoteAnchor(self.id.to_string()),
+                self.id.clone().map(RefNode::NoteAnchor),
                 RefNode::Local(ref_num.parse().unwrap_or(0)),
                 RefLoc::Body(self.line_num, r.start, r.end),
                 Some(name.to_string()),
@@ -215,8 +223,8 @@ impl BodyParsing {
             .map(|c| (c.get_match().range(), c.extract()))
         {
             self.ref_list.push(Ref::new(
-                RefNode::Local(ref_num.parse().unwrap_or(0)),
-                RefNode::NoteAnchor(to_id.to_string()),
+                ref_num.parse().ok().map(RefNode::Local),
+                RefNode::NoteAnchor(to_id.to_owned()),
                 RefLoc::Body(self.line_num, r.start, r.end),
                 None,
             ));

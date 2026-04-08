@@ -1,9 +1,9 @@
-ubse serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize};
 
 use crate::db::Db;
 use crate::note::Note;
 use crate::{MyResult, Result, parse};
-use std::collections::{HashMap};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{self, BufRead};
 use std::path::{Path, PathBuf};
@@ -24,7 +24,6 @@ impl Paths {
         x.get_db_state(db).i()?;
         Ok(x.process())
     }
-
 
     fn init() -> Self {
         Self {
@@ -47,7 +46,11 @@ impl Paths {
                     let path = entry.path();
                     match (path.is_dir(), path.is_file()) {
                         (true, _) => self.add_from_dir(&path),
-                        (_, true) if path.extension().and_then(|x| x.to_str()).unwrap_or("") == "md" => self.undecided.push(path),
+                        (_, true)
+                            if path.extension().and_then(|x| x.to_str()).unwrap_or("") == "md" =>
+                        {
+                            self.undecided.push(path)
+                        }
                         _ => (),
                     };
                 }
@@ -75,7 +78,6 @@ impl Paths {
             self.deleted.push(x);
         }
 
-
         // Somehow pass this back to nvim...
         let mut message: Vec<String> = vec!["Updated Index: ".to_string()];
         for m in self.modified.clone() {
@@ -98,6 +100,7 @@ impl Paths {
         let to_create: Vec<Note> = [self.modified.clone(), self.new.clone()]
             .concat()
             .iter()
+            // TODO: here keep errors and pass back
             .filter_map(|x| process_file(x).ok())
             .collect();
 
@@ -105,7 +108,6 @@ impl Paths {
     }
 
     fn get_db_state(&mut self, db: &Db) -> Result<()> {
-
         self.current_state = db.get_hashes()?;
 
         Ok(())
@@ -114,12 +116,16 @@ impl Paths {
 
 fn process_file(path: &Path) -> Result<Note> {
     let file = fs::File::open(path)?;
-    let modified = file.metadata()?.modified()?;
     let hash = rapidhash::v3::rapidhash_v3_file(&file)?;
-    let file = fs::File::open(path)?;
-    let reader = io::BufReader::new(file);
-    let body_parse = parse::parse_note(parse::LinesIter::File(reader.lines()))?;
-    let note = body_parse.consume(Some(path.to_path_buf()),Some(hash), Some(modified));
+    let modified = file.metadata()?.modified()?;
 
-    Ok(note)
+    // File needs to be re-opened
+    let reader = io::BufReader::new(fs::File::open(path)?);
+    Ok(
+        parse::parse_note(parse::LinesIter::File(reader.lines()))?.add_file_data(
+            path.to_path_buf(),
+            hash,
+            modified,
+        ),
+    )
 }

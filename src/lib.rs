@@ -16,6 +16,8 @@ use crate::note::RefNode;
 
 pub struct Table(pub Vec<(String, LuaValue)>);
 
+pub struct ReturnValue(pub Vec<(String, LuaValue)>);
+
 impl IntoLua for Table {
     fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
         let items = self.to_owned();
@@ -29,9 +31,30 @@ impl IntoLua for Table {
     }
 }
 
+impl IntoLua for ReturnValue {
+    fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
+        let items = self.to_owned();
+        let r = lua.create_table()?;
+        for (k, (s, t)) in items.into_iter().enumerate() {
+            let st = lua.create_table()?;
+            st.set("run", s)?;
+            st.set("opts", t)?;
+            r.set(k+1, st)?;
+        }
+        Ok(LuaValue::Table(r))
+    }
+}
+
 impl Deref for Table {
     type Target = Vec<(String, LuaValue)>;
 
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Deref for ReturnValue {
+    type Target = Vec<(String, LuaValue)>;
     fn deref(&self) -> &Self::Target {
         &self.0
     }
@@ -98,43 +121,49 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
     exports.set(
         "update_index",
         lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
-            lua_db(lua, db_file, notes_dir, |db| db.process_files())
+            lua_db(lua, &db_file, &notes_dir, |db| {
+                Ok(ReturnValue(vec![
+                    ("log".to_string(), db.process_files()?.into_lua(lua)?),
+                    ("err".to_string(), "whoops".into_lua(lua)?),
+                ]))
+            })
         })?,
     )?;
 
     exports.set(
         "enter_command",
         lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
-            lua_db(lua, db_file, notes_dir, |db| db.get_tag_list())
+            lua_db(lua, &db_file, &notes_dir, |db| db.get_tag_list())
         })?,
     )?;
 
     exports.set(
         "get_notes",
         lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
-            lua_db(lua, db_file, notes_dir, |db| db.get_notes())
+            lua_db(lua, &db_file, &notes_dir, |db| db.get_notes())
         })?,
     )?;
 
     exports.set(
         "get_type",
-        lua.create_function(|lua, (notes_dir, db_file, note_type ): (String, String, String)| {
-            lua_db(lua, db_file, notes_dir, |db| db.get_type_notes(note_type))
-        })?,
+        lua.create_function(
+            |lua, (notes_dir, db_file, note_type): (String, String, String)| {
+                lua_db(lua, &db_file, &notes_dir, |db| db.get_type_notes(note_type))
+            },
+        )?,
     )?;
-
 
     exports.set(
         "get_thin_notes",
         lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
-            lua_db(lua, db_file, notes_dir, |db| db.get_thin_notes())
+            lua_db(lua, &db_file, &notes_dir, |db| db.get_thin_notes())
         })?,
     )?;
 
     exports.set(
         "get_note_anchors",
         lua.create_function(|lua, (notes_dir, db_file, id): (String, String, String)| {
-            lua_db(lua, db_file, notes_dir, |db| db.get_note_anchors(id))
+            lua_db(lua, &db_file, &notes_dir, |db| db.get_note_anchors(id))
         })?,
     )?;
 
@@ -142,7 +171,7 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
         "get_backlinks",
         lua.create_function(
             |lua, (notes_dir, db_file, note): (String, String, String)| {
-                lua_db(lua, db_file, notes_dir, |db| db.get_backlinks(note))
+                lua_db(lua, &db_file, &notes_dir, |db| db.get_backlinks(note))
             },
         )?,
     )?;
@@ -151,7 +180,6 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
         "id_gen",
         lua.create_function(|lua, title: String| Ok(title.to_note_id().into_lua(lua)))?,
     )?;
-
 
     exports.set(
         "create_new",
@@ -166,14 +194,14 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
                 Option<String>,
                 Option<Vec<String>>,
             )| {
-                lua_db_multi(lua, &db_file, &notes_dir, |db| match note_type.as_str() {
+                lua_db(lua, &db_file, &notes_dir, |db| match note_type.as_str() {
                     "source" => {
                         let parent = db.get_frontmatter(&parent_id.ok_or(MyError::OtherError)?)?;
                         let (path, new_id) =
                             create::source(parent, &id, &title, &notes_dir, contents)?;
 
-                        Ok((
-                            "note",
+                        Ok(ReturnValue(vec![(
+                            "open".to_string(),
                             Table(vec![
                                 ("path".to_string(), path.into_lua(lua)?),
                                 ("row".to_string(), 11.into_lua(lua)?),
@@ -181,30 +209,32 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
                                     "replace".to_string(),
                                     format!("[[{new_id}|{title}]]").into_lua(lua)?,
                                 ),
-                            ]),
-                        ))
+                            ])
+                            .into_lua(lua)?,
+                        )]))
                     }
                     "author" => {
                         let (path, _) = create::author(&id, &title, &notes_dir, contents)?;
 
-                        Ok((
-                            "note",
+                        Ok(ReturnValue(vec![(
+                            "open".to_string(),
                             Table(vec![
                                 ("path".to_string(), path.into_lua(lua)?),
                                 ("row".to_string(), 11.into_lua(lua)?),
-                            ]),
-                        ))
+                            ])
+                            .into_lua(lua)?,
+                        )]))
                     }
                     "note" => {
                         let parent = db.get_frontmatter(&parent_id.ok_or(MyError::OtherError)?)?;
-                        let parent_type = parent.note_type.clone(); 
+                        let parent_type = parent.note_type.clone();
 
                         let (path, new_id) =
                             create::note(parent, &id, &title, &notes_dir, contents)?;
 
                         if parent_type == "note" {
-                            Ok((
-                                "note",
+                            Ok(ReturnValue(vec![(
+                                "open".to_string(),
                                 Table(vec![
                                     ("path".to_string(), path.into_lua(lua)?),
                                     ("row".to_string(), 11.into_lua(lua)?),
@@ -212,30 +242,33 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
                                         "replace".to_string(),
                                         format!("[[{new_id}|{title}]]").into_lua(lua)?,
                                     ),
-                                ]),
-                            ))
+                                ])
+                                .into_lua(lua)?,
+                            )]))
                         } else {
-                            Ok((
-                                "note",
+                            Ok(ReturnValue(vec![(
+                                "open".to_string(),
                                 Table(vec![
                                     ("path".to_string(), path.into_lua(lua)?),
                                     ("row".to_string(), 11.into_lua(lua)?),
-                                ]),
-                            ))
+                                ])
+                                .into_lua(lua)?,
+                            )]))
                         }
-                    },
+                    }
                     "journal" => {
                         let (path, _) = create::journal(&notes_dir, contents)?;
 
-                        Ok((
-                            "note",
+                        Ok(ReturnValue(vec![(
+                            "open".to_string(),
                             Table(vec![
                                 ("path".to_string(), path.into_lua(lua)?),
                                 ("row".to_string(), 11.into_lua(lua)?),
-                            ]),
-                        ))
+                            ])
+                            .into_lua(lua)?,
+                        )]))
                     }
-                    _ => Err(MyError::OtherError)
+                    _ => Err(MyError::OtherError),
                 })
             },
         )?,
@@ -244,9 +277,8 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
     exports.set(
         "get_highlights",
         lua.create_function(|lua, content: Vec<String>| {
-            let x = parse::parse_note(parse::LinesIter::List(content.into_iter()))
-                .into_lua_err()?
-                .consume(None, None, None);
+            let x =
+                parse::parse_note(parse::LinesIter::List(content.into_iter())).into_lua_err()?;
 
             let mut res: Vec<LuaValue> = vec![];
 
@@ -290,7 +322,10 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
                 )
             }
 
-            Ok(res)
+            Ok(ReturnValue(vec![(
+                "highlight".to_string(),
+                res.into_lua(lua)?,
+            )]))
         })?,
     )?;
     exports.set(
@@ -304,32 +339,31 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
                 usize,
                 usize,
             )| {
-                lua_db_multi(lua, &db_file, &notes_dir, |db| {
+                lua_db(lua, &db_file, &notes_dir, |db| {
                     let start = Instant::now();
-                    let x = parse::parse_note(parse::LinesIter::List(content.into_iter()))?
-                        .consume(None, None, None);
+                    let x = parse::parse_note(parse::LinesIter::List(content.into_iter()))?;
                     let x = x.get_ref(col, row);
 
                     print!("Time Taken: {}s", start.elapsed().as_secs_f64());
-                    Ok(match x {
+                    match x {
                         Some(r) => match r.to {
                             RefNode::NoteAnchor(anchor) => {
                                 let (path, row, col) = db.get_loc(anchor)?;
-                                (
-                                    "note",
+                                Ok(ReturnValue(vec![(
+                                    "open".to_string(),
                                     Table(vec![
                                         ("path".to_string(), path.into_lua(lua)?),
                                         ("row".to_string(), row.into_lua(lua)?),
                                         ("col".to_string(), col.into_lua(lua)?),
-                                    ]),
-                                )
-                                    .into_lua_multi(lua)?
+                                    ])
+                                    .into_lua(lua)?,
+                                )]))
                             }
-                            RefNode::Tag(tag) => ("tag", tag).into_lua_multi(lua)?,
-                            _ => LuaNil.into_lua_multi(lua)?,
+                            RefNode::Tag(tag) => Ok(ReturnValue(vec![("tag".to_string(), tag.into_lua(lua)?)])),
+                            _ => Ok(ReturnValue(vec![])),
                         },
-                        None => LuaNil.into_lua_multi(lua)?,
-                    })
+                        None => Ok(ReturnValue(vec![])),
+                    }
                 })
             },
         )?,
@@ -338,14 +372,14 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
     exports.set(
         "get_tags",
         lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
-            lua_db(lua, db_file, notes_dir, |db| db.get_tag_list())
+            lua_db(lua, &db_file, &notes_dir, |db| db.get_tag_list())
         })?,
     )?;
 
     exports.set(
         "get_tag_notes",
         lua.create_function(|lua, (notes_dir, db_file, tag): (String, String, String)| {
-            lua_db(lua, db_file, notes_dir, |db| db.get_tag_notes(tag))
+            lua_db(lua, &db_file, &notes_dir, |db| db.get_tag_notes(tag))
         })?,
     )?;
 
@@ -354,8 +388,8 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
 
 pub fn lua_db<F, T: IntoLua>(
     lua: &Lua,
-    db_path: String,
-    notes_dir: String,
+    db_path: &String,
+    notes_dir: &String,
     f: F,
 ) -> LuaResult<LuaValue>
 where
