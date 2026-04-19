@@ -1,14 +1,21 @@
 #![feature(trim_prefix_suffix)]
+#![feature(str_from_utf16_endian)]
+#![feature(try_trait_v2)]
+#![feature(iter_intersperse)]
+
+pub mod annotations;
 pub mod create;
 pub mod db;
 pub mod file;
 pub mod fold_rest;
 pub mod note;
 pub mod parse;
+pub mod results;
+pub mod trier;
 
 pub use db::DbValue;
 pub use mlua::prelude::*;
-use std::time::Instant;
+use std::{string::FromUtf16Error, time::Instant};
 pub use std::{fmt::Debug, ops::Deref, path::Path};
 use thiserror::Error;
 
@@ -39,7 +46,7 @@ impl IntoLua for ReturnValue {
             let st = lua.create_table()?;
             st.set("run", s)?;
             st.set("opts", t)?;
-            r.set(k+1, st)?;
+            r.set(k + 1, st)?;
         }
         Ok(LuaValue::Table(r))
     }
@@ -60,6 +67,7 @@ impl Deref for ReturnValue {
     }
 }
 
+pub type Results<T> = results::Results<T, MyError>;
 pub type Result<T> = std::result::Result<T, MyError>;
 
 pub trait ToNoteId {
@@ -90,6 +98,10 @@ pub enum MyError {
     Mlua(#[from] mlua::Error),
     #[error("Json error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("Pdf error: {0}")]
+    Pdf(#[from] lopdf::Error),
+    #[error("Utf16 error: {0}")]
+    Utf16(#[from] FromUtf16Error),
     #[error("File error: {0}")]
     FileError(String),
     #[error("Parse error: {0}")]
@@ -157,6 +169,65 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
         "get_thin_notes",
         lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
             lua_db(lua, &db_file, &notes_dir, |db| db.get_thin_notes())
+        })?,
+    )?;
+
+    exports.set(
+        "get_annotations",
+        lua.create_function(|lua, (pdf, note_path): (String, String)| {
+            let pdf_path = Path::new(&pdf);
+            let annotations = annotations::get_annotations(pdf_path);
+
+            let mut to_append: Vec<String> = Vec::new();
+            to_append.push("## Annotations Export".to_string());
+            to_append.push("".to_string());
+
+            for annotation in annotations.oks.into_iter() {
+                if let Some(comment) = annotation.comment {
+                    if to_append.last().unwrap() != "" {
+                        to_append.push("".to_string());
+                    }
+                    // let c: Vec<String> = comment.split("\n").map(String::from).collect();
+                    to_append.append(&mut comment.split("\n").map(String::from).collect());
+                }
+
+                let highlighted: String = annotation
+                    .quote
+                    .split_whitespace()
+                    .map(str::trim)
+                    .intersperse(" ")
+                    .collect();
+
+                match annotation.priority {
+                    annotations::Priority::High => {
+                        to_append.push("".to_string());
+                        to_append.push(format!(
+                            "> [!QUOTE] {} {{p. {}}}",
+                            highlighted, annotation.page
+                        ));
+                        to_append.push("".to_string());
+                    }
+                    annotations::Priority::Medium | annotations::Priority::Low => {
+                        to_append.push(format!("- {} {{p. {}}}", highlighted, annotation.page));
+                    }
+                };
+            }
+
+            let mut res: Vec<(String, mlua::Value)> = annotations
+                .errs
+                .into_iter()
+                .map(|err| ("err".to_string(), err.to_string().into_lua(lua).unwrap()))
+                .collect();
+
+            res.push((
+                "append".to_string(),
+                Table(vec![
+                    ("contents".to_string(), to_append.into_lua(lua)?),
+                    ("path".to_string(), note_path.into_lua(lua)?),
+                ]).into_lua(lua)?,
+            ));
+
+            Ok(ReturnValue(res))
         })?,
     )?;
 
@@ -359,7 +430,9 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
                                     .into_lua(lua)?,
                                 )]))
                             }
-                            RefNode::Tag(tag) => Ok(ReturnValue(vec![("tag".to_string(), tag.into_lua(lua)?)])),
+                            RefNode::Tag(tag) => {
+                                Ok(ReturnValue(vec![("tag".to_string(), tag.into_lua(lua)?)]))
+                            }
                             _ => Ok(ReturnValue(vec![])),
                         },
                         None => Ok(ReturnValue(vec![])),

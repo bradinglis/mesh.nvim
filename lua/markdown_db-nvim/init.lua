@@ -1,4 +1,4 @@
-local util = require "markdown_db-nvim.util"
+-- local util = require "markdown_db-nvim.util"
 local create = require "markdown_db-nvim.create"
 local buf = require "markdown_db-nvim.buf"
 local bin = require "markdown_db-nvim.binary"
@@ -40,9 +40,26 @@ end
 
 M.update = function()
   require("markdown_db-nvim.rfun").try(function()
-      return bin.update_index(config.current_vault.dir, config.current_vault.db)
-    end
+    return bin.update_index(config.current_vault.dir, config.current_vault.db)
+  end
   )
+end
+
+function M.annotations()
+  local current_file = vim.api.nvim_buf_get_name(0)
+  require("snacks").picker.files({
+    cwd = config.current_vault.dir .. "/annotated",
+    confirm = function(picker, item)
+      picker:close()
+      require("markdown_db-nvim.rfun").try(function()
+        return bin.get_annotations(item._path, current_file)
+      end
+      )
+      local asset_path = config.current_vault.dir ..
+      "/annotated/" .. vim.split(vim.fs.basename(vim.api.nvim_buf_get_name(0)), "%.")[1] .. ".pdf"
+      vim.fn.rename(item._path, asset_path)
+    end
+  })
 end
 
 M.create = create
@@ -51,7 +68,7 @@ M.buf = buf
 M.pick = pick
 M.open_asset = function()
   local asset_path = config.current_vault.dir ..
-  "/annotated/" .. vim.split(vim.fs.basename(vim.api.nvim_buf_get_name(0)), "%.")[1]
+      "/annotated/" .. vim.split(vim.fs.basename(vim.api.nvim_buf_get_name(0)), "%.")[1]
 
   if vim.fn.filereadable(asset_path .. ".pdf") == 1 then
     asset_path = asset_path .. ".pdf"
@@ -63,9 +80,6 @@ M.open_asset = function()
 
   vim.fn.jobstart({ "lektra", asset_path })
 end
-
-
-
 
 function M.fill_from_boox()
   local function get_file_contents(file_path)
