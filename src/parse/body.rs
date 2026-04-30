@@ -1,8 +1,6 @@
 use crate::parse::{Lines, frontmatter::FrontMatter};
-use std::path::PathBuf;
-use std::time::SystemTime;
 
-use crate::{MyError, Result, NoteId};
+use crate::{Result, NoteId};
 use regex::Regex;
 use std::sync::LazyLock;
 

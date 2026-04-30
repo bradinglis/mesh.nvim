@@ -2,7 +2,6 @@ use std::fmt::Display;
 use unicode_bom::Bom;
 
 use crate::MyError;
-use crate::Result;
 use crate::Results;
 use crate::trier;
 use serde::Deserialize;
@@ -57,7 +56,7 @@ pub fn get_annotations(path: &std::path::Path) -> Results<Annotation> {
                 .map(|x| {
                     let u2: Vec<u8> = x
                         .get(b"onyxtag")
-                        .map_err(|e| MyError::String(format!("This dict is weird!! — {:?}", x)))?
+                        .map_err(|_e| MyError::String(format!("This dict is weird!! — {:?}", x)))?
                         .as_str()?
                         .to_vec()
                         .iter()

@@ -1,4 +1,3 @@
-use std::iter::Peekable;
 
 use crate::Result;
 use crate::parse::Lines;

@@ -2,7 +2,6 @@ use std::fmt::Display;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use crate::{MyError, Result};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -118,7 +117,7 @@ pub(crate) enum RefNode {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub(crate) enum RefLoc {
+pub enum RefLoc {
     FrontMatter(usize, usize, usize),
     Body(usize, usize, usize),
 }

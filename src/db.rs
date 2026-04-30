@@ -385,7 +385,7 @@ impl DbValue {
 pub struct Db {
     pub(crate) connection: duckdb::Connection,
     pub(crate) notes_path: PathBuf,
-    pub(crate) errors: Vec<MyError>,
+    // pub(crate) errors: Vec<MyError>,
 }
 
 impl Db {
@@ -393,7 +393,7 @@ impl Db {
         let db = Self {
             connection: duckdb::Connection::open(db_path)?,
             notes_path: notes_dir.to_path_buf(),
-            errors: vec![],
+            // errors: vec![],
         };
 
         if db
@@ -428,7 +428,7 @@ impl Db {
         Ok(message.join("\n"))
     }
 
-    fn update_notes(&self, mut to_add: Vec<note::Note>, to_remove: Vec<String>) -> Result<()> {
+    fn update_notes(&self, to_add: Vec<note::Note>, to_remove: Vec<String>) -> Result<()> {
         if !to_remove.is_empty() {
             let placeholders: Vec<&str> = std::iter::repeat_n("?", to_remove.len()).collect();
             self.connection.execute(
@@ -468,7 +468,7 @@ impl Db {
             let mut content: Vec<Content> = vec![];
 
             // TODO: this properly
-            let x: Vec<Result<()>> = to_add
+            let _x: Vec<Result<()>> = to_add
                 .into_iter()
                 .map(|mut n| -> Result<()> {
                     while let Some(t) = n.tags.pop() {

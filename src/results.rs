@@ -1,4 +1,4 @@
-use std::ops::{FromResidual, Try};
+use std::ops::FromResidual;
 
 pub struct Results<T, E> {
     pub oks: Vec<T>,

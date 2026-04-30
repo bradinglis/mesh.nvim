@@ -1,11 +1,9 @@
-use std::iter::Peekable;
-use std::path::Path;
 use std::str::SplitWhitespace;
 
 use crate::MyError;
 use crate::Result;
 use crate::fold_rest::{FoldRest, IterState};
-use crate::note::{NoteType, Ref, RefLoc, RefNode};
+use crate::note::{Ref, RefLoc, RefNode};
 use crate::parse::Lines;
 
 #[derive(Debug)]
