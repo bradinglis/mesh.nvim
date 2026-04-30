@@ -63,7 +63,7 @@ impl FrontMatter {
     fn add_line_to_frontmatter(&mut self, line: String, lnum: usize) -> Result<()> {
         let _: () = match line.split_once(": ") {
             Some(("id", suff)) => self.id = Some(suff.to_string()),
-            Some(("aliases", suff)) => self.aliases = Some(suff.to_string()),
+            Some(("aliases", suff)) => self.aliases = Some(suff.trim_matches('"').to_string()),
             Some(("type", suff)) => self.note_type = Some(suff.to_string()),
             Some(("source-parents", suff)) => self.add_source_parents(suff, lnum),
             Some(("author", suff)) => self.add_authors(suff, lnum),

@@ -89,11 +89,12 @@ function M.from_notes(notes)
   local entries = vim.tbl_map(function(n)
     i = i - 1
     return {
-      text = (n.title or "") .. " " .. (table.concat(n.authors, ", ") or "") .. " " .. n.id,
-      ordinal = (n.title or "") .. " " .. (table.concat(n.authors, ", ") or "") .. " " .. n.id,
+      text = n.text or ((n.title or "") .. " " .. (table.concat(n.authors, ", ") or "") .. " " .. n.id),
+      ordinal = n.text or ((n.title or "") .. " " .. (table.concat(n.authors, ", ") or "") .. " " .. n.id),
       title = (n.title or ""),
       author = (table.concat(n.authors, ", ") or ""),
       kind = n.kind,
+      grep_text = n.text or nil,
       direction = n.direction,
       tags = n.tags,
       icon = icon_dict[n.type] or "",
@@ -117,15 +118,22 @@ function M.from_notes(notes)
         ret[#ret + 1] = { set_string_width(link_dict[item.direction][item.kind], 14) .. " ", "Fg" }
       end
 
-      if item.author ~= "" then
-        ret[#ret + 1] = { set_string_width(item.title, 40) .. " ", "markdownBoldItalic" }
-        ret[#ret + 1] = { set_string_width(item.author, 20) .. " ", "markdownItalic" }
+      if item.grep_text then
+          ret[#ret + 1] = { set_string_width("[" .. item.pos[1] .. "]", 5), "Fg" }
+          ret[#ret + 1] = { set_string_width(item.title, 40) .. " ", "markdownBoldItalic" }
+          ret[#ret + 1] = { item.grep_text, "Fg" }
       else
-        ret[#ret + 1] = { set_string_width(item.title, 61) .. " ", "markdownBoldItalic" }
+        if item.author ~= "" then
+          ret[#ret + 1] = { set_string_width(item.title, 40) .. " ", "markdownBoldItalic" }
+          ret[#ret + 1] = { set_string_width(item.author, 20) .. " ", "markdownItalic" }
+        else
+          ret[#ret + 1] = { set_string_width(item.title, 61) .. " ", "markdownBoldItalic" }
+        end
+
+        ret[#ret + 1] = { set_string_width(table.concat(item.tags, " "), 60) .. " ", "ObsidianTag" }
+        ret[#ret + 1] = { item.id, "Grey" }
       end
 
-      ret[#ret + 1] = { set_string_width(table.concat(item.tags, " "), 60) .. " ", "ObsidianTag" }
-      ret[#ret + 1] = { item.id, "Grey" }
       return ret
     end
   })

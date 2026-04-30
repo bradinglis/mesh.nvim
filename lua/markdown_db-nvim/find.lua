@@ -14,6 +14,14 @@ function M.all()
   )
 end
 
+function M.grep()
+  util.try(function()
+      return bin.get_lines(config.current_vault.dir, config.current_vault.db)
+    end,
+    pick.from_notes
+  )
+end
+
 function M.notes()
   util.try(function()
       return bin.get_type(config.current_vault.dir, config.current_vault.db, "note")

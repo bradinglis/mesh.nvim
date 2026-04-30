@@ -2,7 +2,7 @@ use crate::parse::{Lines, frontmatter::FrontMatter};
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use crate::{MyError, Result, ToNoteId};
+use crate::{MyError, Result, NoteId};
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -141,7 +141,7 @@ impl BodyParsing {
                         heading_link.push_str(x.as_str());
                     } else {
 
-                        heading_link.push_str(&heading.to_string().to_note_id());
+                        heading_link.push_str(&NoteId::derive(heading).to_owned());
                     }
                 },
                 2 => {
@@ -151,7 +151,7 @@ impl BodyParsing {
                     } else {
                         heading_link.push('#');
                     }
-                    heading_link.push_str(&heading.to_string().to_note_id());
+                    heading_link.push_str(&NoteId::derive(heading).to_owned());
                 },
                 x => {
                     if let Some(x) = self.parent_anchor(x - 1).map(|x| x.heading_link) {
@@ -160,7 +160,7 @@ impl BodyParsing {
                     } else {
                         heading_link.push('#');
                     }
-                    heading_link.push_str(&heading.to_string().to_note_id());
+                    heading_link.push_str(&NoteId::derive(heading).to_owned());
                 }
             }
 

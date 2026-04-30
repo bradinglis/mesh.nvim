@@ -4,6 +4,14 @@ use chrono::offset::Local;
 use std::fs;
 use std::io::Write;
 
+fn friendly_string(s: &String) -> String {
+    if s.contains([':', '{', '}', '[', ']', ',', '&', '*', '#', '?', '|', '-', '<', '>', '=', '!', '%']) {
+        format!("\"{}\"", s)
+    } else {
+        s.to_string()
+    }
+}
+
 pub fn journal(notes_dir: &String, contents: Option<Vec<String>>) -> Result<(String, String)> {
     let current_datetime = Local::now();
 
@@ -14,7 +22,7 @@ pub fn journal(notes_dir: &String, contents: Option<Vec<String>>) -> Result<(Str
 
     let new = Frontmatter {
         id: id.clone(),
-        aliases: title.to_string(),
+        aliases: friendly_string(&title),
         note_type: "journal".to_string(),
         author: None,
         source_parents: None,
@@ -38,7 +46,7 @@ pub fn author(
 
     let child = Frontmatter {
         id: id.clone(),
-        aliases: title.to_string(),
+        aliases: friendly_string(title),
         note_type: "author".to_string(),
         author: None,
         source_parents: None,
@@ -62,7 +70,7 @@ pub fn note(
 
     let note = Frontmatter {
         id: id.clone(),
-        aliases: title.to_string(),
+        aliases: friendly_string(title),
         note_type: "note".to_string(),
         author: None,
         source_parents: None,
@@ -104,7 +112,7 @@ pub fn source(
 
     let child = Frontmatter {
         id: id.clone(),
-        aliases: child_title.to_string(),
+        aliases: friendly_string(child_title),
         note_type: "source".to_string(),
         author: Some(authors),
         source_parents: Some(source_parents),

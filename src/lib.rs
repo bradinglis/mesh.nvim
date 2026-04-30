@@ -2,6 +2,7 @@
 #![feature(str_from_utf16_endian)]
 #![feature(try_trait_v2)]
 #![feature(iter_intersperse)]
+#![feature(string_from_utf8_lossy_owned)]
 
 pub mod annotations;
 pub mod create;
@@ -15,15 +16,18 @@ pub mod trier;
 
 pub use db::DbValue;
 pub use mlua::prelude::*;
-use std::{string::FromUtf16Error, time::Instant};
 pub use std::{fmt::Debug, ops::Deref, path::Path};
+use std::{
+    string::{FromUtf8Error, FromUtf16Error},
+    time::Instant,
+};
 use thiserror::Error;
 
 use crate::note::RefNode;
 
 pub struct Table(pub Vec<(String, LuaValue)>);
-
 pub struct ReturnValue(pub Vec<(String, LuaValue)>);
+pub struct NoteId(String);
 
 impl IntoLua for Table {
     fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
@@ -67,6 +71,36 @@ impl Deref for ReturnValue {
     }
 }
 
+impl Deref for NoteId {
+    type Target = String;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl NoteId {
+    fn derive(value: &str) -> Self {
+        NoteId(
+            value
+                .split_whitespace()
+                .filter_map(|word| {
+                    if word.starts_with(|ch: char| ch.is_lowercase()) {
+                        None
+                    } else {
+                        Some(
+                            word.to_lowercase()
+                                .chars()
+                                .filter(|y| *y == '-' || y.is_ascii_alphanumeric())
+                                .collect(),
+                        )
+                    }
+                })
+                .collect::<Vec<String>>()
+                .join("-"),
+        )
+    }
+}
+
 pub type Results<T> = results::Results<T, MyError>;
 pub type Result<T> = std::result::Result<T, MyError>;
 
@@ -76,12 +110,18 @@ pub trait ToNoteId {
 
 impl ToNoteId for String {
     fn to_note_id(self) -> String {
-        self.split(" ")
-            .map(|x| {
-                x.to_lowercase()
-                    .chars()
-                    .filter(|y| *y == '-' || y.is_ascii_alphanumeric())
-                    .collect()
+        self.split_whitespace()
+            .filter_map(|word| {
+                if word.starts_with(|ch: char| ch.is_lowercase()) {
+                    None
+                } else {
+                    Some(
+                        word.to_lowercase()
+                            .chars()
+                            .filter(|y| *y == '-' || y.is_ascii_alphanumeric())
+                            .collect(),
+                    )
+                }
             })
             .collect::<Vec<String>>()
             .join("-")
@@ -102,6 +142,10 @@ pub enum MyError {
     Pdf(#[from] lopdf::Error),
     #[error("Utf16 error: {0}")]
     Utf16(#[from] FromUtf16Error),
+    #[error("Utf8 error: {0}")]
+    Utf8(#[from] FromUtf8Error),
+    #[error("Message: {0}")]
+    String(String),
     #[error("File error: {0}")]
     FileError(String),
     #[error("Parse error: {0}")]
@@ -136,7 +180,7 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
             lua_db(lua, &db_file, &notes_dir, |db| {
                 Ok(ReturnValue(vec![
                     ("log".to_string(), db.process_files()?.into_lua(lua)?),
-                    ("err".to_string(), "whoops".into_lua(lua)?),
+                    // ("err".to_string(), "whoops".into_lua(lua)?),
                 ]))
             })
         })?,
@@ -153,6 +197,13 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
         "get_notes",
         lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
             lua_db(lua, &db_file, &notes_dir, |db| db.get_notes())
+        })?,
+    )?;
+
+    exports.set(
+        "get_lines",
+        lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
+            lua_db(lua, &db_file, &notes_dir, |db| db.get_lines())
         })?,
     )?;
 
@@ -176,15 +227,15 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
         "get_annotations",
         lua.create_function(|lua, (pdf, note_path): (String, String)| {
             let pdf_path = Path::new(&pdf);
-            let annotations = annotations::get_annotations(pdf_path);
+            let an_res = annotations::get_annotations(pdf_path);
 
             let mut to_append: Vec<String> = Vec::new();
             to_append.push("## Annotations Export".to_string());
             to_append.push("".to_string());
 
-            for annotation in annotations.oks.into_iter() {
+            for annotation in an_res.oks.into_iter() {
                 if let Some(comment) = annotation.comment {
-                    if to_append.last().unwrap() != "" {
+                    if !to_append.last().map_or("", |s| s).is_empty() {
                         to_append.push("".to_string());
                     }
                     // let c: Vec<String> = comment.split("\n").map(String::from).collect();
@@ -200,7 +251,9 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
 
                 match annotation.priority {
                     annotations::Priority::High => {
-                        to_append.push("".to_string());
+                        if !to_append.last().map_or("", |s| s).is_empty() {
+                            to_append.push("".to_string());
+                        }
                         to_append.push(format!(
                             "> [!QUOTE] {} {{p. {}}}",
                             highlighted, annotation.page
@@ -213,7 +266,7 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
                 };
             }
 
-            let mut res: Vec<(String, mlua::Value)> = annotations
+            let mut res: Vec<(String, mlua::Value)> = an_res
                 .errs
                 .into_iter()
                 .map(|err| ("err".to_string(), err.to_string().into_lua(lua).unwrap()))
@@ -224,7 +277,8 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
                 Table(vec![
                     ("contents".to_string(), to_append.into_lua(lua)?),
                     ("path".to_string(), note_path.into_lua(lua)?),
-                ]).into_lua(lua)?,
+                ])
+                .into_lua(lua)?,
             ));
 
             Ok(ReturnValue(res))
@@ -249,7 +303,9 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
 
     exports.set(
         "id_gen",
-        lua.create_function(|lua, title: String| Ok(title.to_note_id().into_lua(lua)))?,
+        lua.create_function(|lua, title: String| {
+            Ok(NoteId::derive(&title).to_owned().into_lua(lua))
+        })?,
     )?;
 
     exports.set(
@@ -472,21 +528,6 @@ where
         .and_then(f)
         .into_lua_err()
         .and_then(|x| x.into_lua(lua))
-}
-
-pub fn lua_db_multi<F, T: IntoLuaMulti>(
-    lua: &Lua,
-    db_path: &String,
-    notes_dir: &String,
-    f: F,
-) -> LuaResult<LuaMultiValue>
-where
-    F: FnOnce(db::Db) -> Result<T>,
-{
-    db::Db::init(Path::new(&notes_dir), Path::new(&db_path))
-        .and_then(f)
-        .into_lua_err()
-        .and_then(|x| x.into_lua_multi(lua))
 }
 
 pub fn bin_do<F, T: Debug>(db_path: String, notes_dir: String, f: F) -> Result<T>

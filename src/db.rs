@@ -132,7 +132,10 @@ impl Reference {
                 end_col,
             })
         } else {
-            Err(MyError::ParseError(format!("Link is weird: {:?}, {:?}, {:?}, {:?}, {:?}", from, kind, line, start_col, end_col)))
+            Err(MyError::ParseError(format!(
+                "Link is weird: {:?}, {:?}, {:?}, {:?}, {:?}",
+                from, kind, line, start_col, end_col
+            )))
         }
     }
 
@@ -374,10 +377,6 @@ impl DbValue {
             duckdb::types::Value::Boolean(x) => DbValue::Bool(x),
             duckdb::types::Value::Float(x) => DbValue::Float(x.into()),
             duckdb::types::Value::Double(x) => DbValue::Float(x),
-            // duckdb::types::Value::Timestamp(time_unit, _) => todo!(),
-            // duckdb::types::Value::Blob(items) => todo!(),
-            // duckdb::types::Value::Date32(_) => todo!(),
-            // duckdb::types::Value::Time64(time_unit, _) => todo!(),
             _x => DbValue::None,
         })
     }
@@ -387,14 +386,12 @@ pub struct Db {
     pub(crate) connection: duckdb::Connection,
     pub(crate) notes_path: PathBuf,
     pub(crate) errors: Vec<MyError>,
-    // pub(crate) db_path: PathBuf,
 }
 
 impl Db {
     pub fn init(notes_dir: &std::path::Path, db_path: &std::path::Path) -> Result<Self> {
         let db = Self {
             connection: duckdb::Connection::open(db_path)?,
-            // db_path: db_path.to_path_buf(),
             notes_path: notes_dir.to_path_buf(),
             errors: vec![],
         };
@@ -471,35 +468,38 @@ impl Db {
             let mut content: Vec<Content> = vec![];
 
             // TODO: this properly
-            let x: Vec<Result<()>> = to_add.into_iter().map(|mut n| -> Result<()> {
-                while let Some(t) = n.tags.pop() {
-                    tags.push(Tag::from_tag(t)?);
-                }
-                while let Some(r) = n.links.pop() {
-                    references.push(Reference::from_link(r)?);
-                }
-                while let Some(c) = n.contents.pop() {
-                    if let Ok(l) = Content::from_content_line(c) {
-                        content.push(l);
+            let x: Vec<Result<()>> = to_add
+                .into_iter()
+                .map(|mut n| -> Result<()> {
+                    while let Some(t) = n.tags.pop() {
+                        tags.push(Tag::from_tag(t)?);
                     }
-                }
-                while let Some(p) = n.source_parents.pop() {
-                    references.push(Reference::from_parent(p)?);
-                }
-                while let Some(a) = n.author.pop() {
-                    references.push(Reference::from_author(a)?);
-                }
-                while let Some(h) = n.headings.pop() {
-                    if let Ok(a) = Anchor::from_heading(h) {
-                        headings.push(a)
+                    while let Some(r) = n.links.pop() {
+                        references.push(Reference::from_link(r)?);
                     }
-                }
-                if let Ok(note) = Note::from_note(n) {
-                    notes.push(note);
-                }
+                    while let Some(c) = n.contents.pop() {
+                        if let Ok(l) = Content::from_content_line(c) {
+                            content.push(l);
+                        }
+                    }
+                    while let Some(p) = n.source_parents.pop() {
+                        references.push(Reference::from_parent(p)?);
+                    }
+                    while let Some(a) = n.author.pop() {
+                        references.push(Reference::from_author(a)?);
+                    }
+                    while let Some(h) = n.headings.pop() {
+                        if let Ok(a) = Anchor::from_heading(h) {
+                            headings.push(a)
+                        }
+                    }
+                    if let Ok(note) = Note::from_note(n) {
+                        notes.push(note);
+                    }
 
-                Ok(())
-            }).collect();
+                    Ok(())
+                })
+                .collect();
 
             let mut app_notes = self.connection.appender("notes")?;
             let mut app_tags = self.connection.appender("tags")?;
@@ -775,8 +775,11 @@ impl Db {
 
     pub fn get_notes(&self) -> Result<DbValue> {
         let x = self.run_and_return_list(include_str!("../sql/notes_details.sql"), [])?;
-        // TODO: Messages
-        // println!("{:?}", x);
+        Ok(x)
+    }
+
+    pub fn get_lines(&self) -> Result<DbValue> {
+        let x = self.run_and_return_list(&format!("select contents.line, contents.text, note.* from contents join ({}) as note on contents.note_id == note.id;", include_str!("../sql/notes_details.sql")), [])?;
         Ok(x)
     }
 
