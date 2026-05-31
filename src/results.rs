@@ -1,5 +1,6 @@
 use std::ops::FromResidual;
 
+#[derive(Debug)]
 pub struct Results<T, E> {
     pub oks: Vec<T>,
     pub errs: Vec<E>,
@@ -7,7 +8,7 @@ pub struct Results<T, E> {
 
 impl<T, E> From<Vec<std::result::Result<T, E>>> for Results<T, E> {
     fn from(value: Vec<std::result::Result<T, E>>) -> Self {
-        Self::from_iter(value.into_iter())
+        Self::from_iter(value)
     }
 }
 

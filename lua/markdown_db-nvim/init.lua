@@ -81,6 +81,8 @@ M.open_asset = function()
   vim.fn.jobstart({ "lektra", asset_path })
 end
 
+
+
 function M.fill_from_boox()
   local function get_file_contents(file_path)
     local file = io.open(file_path, "r")

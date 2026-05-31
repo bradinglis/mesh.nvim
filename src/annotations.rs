@@ -4,6 +4,19 @@ use unicode_bom::Bom;
 use crate::MyError;
 use crate::Results;
 use crate::trier;
+use pdf_oxide::AnnotationColor;
+use pdf_oxide::PdfDocument;
+use pdf_oxide::AnnotationSubtype;
+use pdf_oxide::api::Rect;
+use pdf_oxide::converters::MarkdownConverter;
+use pdf_oxide::layout::TextSpan;
+use pdf_oxide::pipeline::MarkdownOutputConverter;
+use pdf_oxide::pipeline::OrderedTextSpan;
+use pdf_oxide::pipeline::OutputConverter;
+use pdf_oxide::pipeline::ReadingOrderContext;
+use pdf_oxide::pipeline::TextPipeline;
+use pdf_oxide::pipeline::TextPipelineConfig;
+use std::cmp::Ordering;
 use serde::Deserialize;
 
 #[derive(Deserialize)]
@@ -19,106 +32,138 @@ struct Highlight {
 
 #[derive(Debug)]
 pub struct Annotation {
-    pub comment: Option<String>,
-    pub page: u32,
+    pub comment: Comment,
+    pub page_num: usize,
+    pub quote_kind: AnnotType,
     pub quote: String,
-    pub priority: Priority,
 }
 
 #[derive(Debug)]
-pub enum Priority {
-    High,
-    Medium,
-    Low,
+pub enum Comment {
+    Thought(String),
+    Caveat(String),
+    Question(String),
+    Summary(String),
+    None,
 }
 
-impl Display for Priority {
+#[derive(Debug)]
+pub enum AnnotType {
+    Quote,
+    Emphasis,
+    Point,
+}
+
+impl Display for AnnotType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(match self {
-            Priority::High => "high",
-            Priority::Medium => "medium",
-            Priority::Low => "low",
+            AnnotType::Quote => "quote",
+            AnnotType::Emphasis => "emphasis",
+            AnnotType::Point => "point",
         })
     }
 }
 
-pub fn get_annotations(path: &std::path::Path) -> Results<Annotation> {
-    let doc = lopdf::Document::load(path)?;
+pub fn get_annotations(path: &std::path::Path) -> crate::Result<Vec<Annotation>> {
+    let doc = PdfDocument::open(path)?;
+    let outline = doc.get_outline()?;
 
-    let pages = doc.get_pages();
+    let config = TextPipelineConfig::default();
+    let converter = MarkdownOutputConverter::new();
+    let mut res = Vec::new();
+    for page_num in doc.page_indices() {
+        let annots = doc.get_annotations(page_num)?;
+        for annot in annots {
+            if annot.subtype_enum == AnnotationSubtype::Highlight {
+                let quote = if let Some(quads) = annot.quad_points {
+                    let mut reading_order: usize = 0;
+                    let spans: Vec<OrderedTextSpan> = quads
+                        .into_iter()
+                        .flat_map(|quad| {
+                            let r = Rect::from_points(
+                                quad[4] as f32,
+                                quad[5] as f32,
+                                quad[2] as f32,
+                                quad[3] as f32,
+                            );
 
-    pages
-        .iter()
-        .flat_map(|(page_num, page)| {
-            doc.get_page_annotations(*page)
-                .unwrap()
-                .into_iter()
-                .map(|x| {
-                    let u2: Vec<u8> = x
-                        .get(b"onyxtag")
-                        .map_err(|_e| MyError::String(format!("This dict is weird!! — {:?}", x)))?
-                        .as_str()?
-                        .to_vec()
-                        .iter()
-                        .flat_map(|x| match *x {
-                            // —
-                            132 | 133 => vec![226, 128, 148],
-                            // "
-                            141 | 142 => vec![34],
-                            // '
-                            143 | 144 => vec![39],
-                            // ł
-                            155 => vec![197, 130],
-                            a => vec![a],
+                            let mut spans = doc
+                                .extract_spans_in_rect(
+                                    page_num,
+                                    r,
+                                    pdf_oxide::layout::RectFilterMode::MinOverlap(0.5),
+                                )
+                                .unwrap();
+
+                            spans.sort_unstable_by(|x, y| {
+                                if x.bbox.x > y.bbox.x {
+                                    Ordering::Greater
+                                } else {
+                                    Ordering::Less
+                                }
+                            });
+                            let x = spans.into_iter().map(move |x| {
+                                let x = OrderedTextSpan::new(x, reading_order);
+                                reading_order += 1;
+                                x
+                            });
+                            reading_order += x.len();
+                            x
                         })
                         .collect();
 
-                    let onyxtag = String::from_utf8(u2.to_vec()).map_err(|e| {
-                        MyError::String(format!(
-                            "incorrect bit: {}\nlossy: `{}`",
-                            e.clone().as_bytes()[e.utf8_error().valid_up_to()],
-                            e.into_utf8_lossy()
-                        ))
-                    })?;
-                    let v: OnyxTag = serde_json::from_str(&onyxtag)?;
+                    converter
+                        .convert(&spans, &config)?
+                        .replace("‘", "'")
+                        .replace("’", "'")
+                        .replace("“", "\"")
+                        .replace("”", "\"")
+                        .replace("\n\n", " ")
+                        .replace("&dquo;", "\"")
+                } else {
+                    "".to_string()
+                };
 
-                    let comment = x.get(b"Contents")?.as_str()?;
+                let comment = match annot.contents {
+                    Some(x) if x.starts_with("Q: ") => {
+                        Comment::Question(x.trim_prefix("Q: ").to_string())
+                    }
+                    Some(x) if x.starts_with("T: ") => {
+                        Comment::Thought(x.trim_prefix("T: ").to_string())
+                    }
+                    Some(x) if x.starts_with("C: ") => {
+                        Comment::Caveat(x.trim_prefix("C: ").to_string())
+                    }
+                    Some(x) => Comment::Summary(x),
+                    None => Comment::None,
+                };
 
-                    let bom: Bom = comment.into();
-                    let comment = &comment[bom.len()..];
+                let quote_kind = if let Some(color) = annot.color {
+                    let r = color[0];
+                    let g = color[1];
+                    let b = color[2];
 
-                    let comment = match bom {
-                        Bom::Utf8 => String::from_utf8(comment.to_vec()).unwrap_or_default(),
-                        Bom::Utf16Be => String::from_utf16be(comment).unwrap_or_default(),
-                        Bom::Utf16Le => String::from_utf16le(comment).unwrap_or_default(),
-                        _ => trier::Tryer::new()
-                            .or_try(|| String::from_utf8(comment.to_vec()))
-                            .or_try(|| String::from_utf16be(comment))
-                            .or_try(|| Some(String::from_utf8_lossy(comment)))
-                            .unwrap_or_lazy(String::new),
-                    };
-
-                    let comment = if !comment.is_empty() {
-                        Some(comment.trim().to_string())
+                    if r == 1.0 {
+                        AnnotType::Quote
+                    } else if b == 1.0 {
+                        AnnotType::Point
                     } else {
-                        None
-                    };
+                        AnnotType::Emphasis
+                    }
+                } else {
+                    AnnotType::Emphasis
+                };
 
-                    let extra: Highlight = serde_json::from_str(&v.extra_attr)?;
-                    let quote = extra.quote.trim().to_string();
-                    let priority = match v.color.as_str() {
-                        "4293787903" => Priority::High,
-                        "4278251775" => Priority::Medium,
-                        _ => Priority::Low,
-                    };
+                res.push(Annotation {
+                    comment,
+                    page_num,
+                    quote_kind,
+                    quote,
+                });
+            }
+        }
+    }
 
-                    Ok(Annotation {
-                        comment,
-                        page: *page_num,
-                        quote,
-                        priority,
-                    })
-                })
-        })
-        .collect()
+    Ok(res)
 }
+

@@ -24,7 +24,7 @@ local funs = {
     vim.api.nvim_win_set_cursor(win, { lines + 1, 0 })
   end,
   err = function(to_log)
-    vim.notify(to_log, vim.log.levels.ERROR)
+    dd(to_log)
   end,
   highlight = function(highlights)
     local ns_id = vim.api.nvim_create_namespace("markdown_db")

@@ -139,7 +139,7 @@ pub enum MyError {
     #[error("Json error: {0}")]
     Json(#[from] serde_json::Error),
     #[error("Pdf error: {0}")]
-    Pdf(#[from] lopdf::Error),
+    Pdf(#[from] pdf_oxide::Error),
     #[error("Utf16 error: {0}")]
     Utf16(#[from] FromUtf16Error),
     #[error("Utf8 error: {0}")]
@@ -227,21 +227,43 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
         "get_annotations",
         lua.create_function(|lua, (pdf, note_path): (String, String)| {
             let pdf_path = Path::new(&pdf);
-            let an_res = annotations::get_annotations(pdf_path);
+            let an_res = annotations::get_annotations(pdf_path).unwrap();
 
             let mut to_append: Vec<String> = Vec::new();
             to_append.push("## Annotations Export".to_string());
             to_append.push("".to_string());
 
-            for annotation in an_res.oks.into_iter() {
-                if let Some(comment) = annotation.comment {
-                    if !to_append.last().map_or("", |s| s).is_empty() {
-                        to_append.push("".to_string());
-                    }
-                    // let c: Vec<String> = comment.split("\n").map(String::from).collect();
-                    to_append.append(&mut comment.split("\n").map(String::from).collect());
+            for annotation in an_res.into_iter() {
+                if !to_append.last().map_or("", |s| s).is_empty() {
+                    to_append.push("".to_string());
                 }
 
+                match annotation.comment {
+                    annotations::Comment::Thought(s) => to_append.append(
+                        &mut format!("> [!THOUGHT] {}", s)
+                            .split("\n")
+                            .map(String::from)
+                            .collect(),
+                    ),
+                    annotations::Comment::Caveat(s) => to_append.append(
+                        &mut format!("> [!CAVEAT] {}", s)
+                            .split("\n")
+                            .map(String::from)
+                            .collect(),
+                    ),
+                    annotations::Comment::Question(s) => to_append.append(
+                        &mut format!("> [!QUESTION] {}", s)
+                            .split("\n")
+                            .map(String::from)
+                            .collect(),
+                    ),
+                    annotations::Comment::Summary(s) => {
+                        to_append.append(&mut s.split("\n").map(String::from).collect())
+                    }
+                    annotations::Comment::None => {
+                        to_append.pop();
+                    }
+                }
                 let highlighted: String = annotation
                     .quote
                     .split_whitespace()
@@ -249,29 +271,32 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
                     .intersperse(" ")
                     .collect();
 
-                match annotation.priority {
-                    annotations::Priority::High => {
+                match annotation.quote_kind {
+                    annotations::AnnotType::Quote => {
                         if !to_append.last().map_or("", |s| s).is_empty() {
                             to_append.push("".to_string());
                         }
                         to_append.push(format!(
                             "> [!QUOTE] {} {{p. {}}}",
-                            highlighted, annotation.page
+                            highlighted, annotation.page_num
                         ));
                         to_append.push("".to_string());
                     }
-                    annotations::Priority::Medium | annotations::Priority::Low => {
-                        to_append.push(format!("- {} {{p. {}}}", highlighted, annotation.page));
+                    annotations::AnnotType::Emphasis => {
+                        to_append.push(format!("- =={}==", highlighted));
+                    }
+                    annotations::AnnotType::Point => {
+                        to_append.push(format!("- {}", highlighted));
                     }
                 };
             }
 
-            let mut res: Vec<(String, mlua::Value)> = an_res
-                .errs
-                .into_iter()
-                .map(|err| ("err".to_string(), err.to_string().into_lua(lua).unwrap()))
-                .collect();
-
+            // let mut res: Vec<(String, mlua::Value)> = an_res
+            //     .errs
+            //     .into_iter()
+            //     .map(|err| ("err".to_string(), err.to_string().into_lua(lua).unwrap()))
+            //     .collect();
+            let mut res: Vec<(String, mlua::Value)> = Vec::new();
             res.push((
                 "append".to_string(),
                 Table(vec![
