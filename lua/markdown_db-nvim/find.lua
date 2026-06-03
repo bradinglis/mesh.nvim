@@ -3,7 +3,6 @@ local util = require "markdown_db-nvim.util"
 local pick = require "markdown_db-nvim.pick"
 local config = require "markdown_db-nvim.config"
 
-
 local M = {}
 
 function M.all()

@@ -1,6 +1,5 @@
 local find = require("markdown_db-nvim.find")
 local util = require("markdown_db-nvim.util")
-local p = require "markdown_db-nvim"
 
 local M = {}
 
@@ -46,9 +45,9 @@ local funs = {
 
 }
 
-local function run(cmd, opts, update, viz)
+function M.run(cmd, opts, update, viz)
   if update then
-    p.update()
+    require "markdown_db-nvim".update()
   end
 
   funs[cmd](opts, viz)
@@ -58,7 +57,7 @@ function M.try(f, update, viz)
   util.try(f,
     function(x)
       for _, value in ipairs(x) do
-        run(value.run, value.opts, update, viz)
+        M.run(value.run, value.opts, update, viz)
       end
     end
   )

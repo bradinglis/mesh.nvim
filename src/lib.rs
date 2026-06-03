@@ -23,7 +23,7 @@ use std::{
 };
 use thiserror::Error;
 
-use crate::note::RefNode;
+use crate::{annotations::display_outline_item, note::RefNode};
 
 pub struct Table(pub Vec<(String, LuaValue)>);
 pub struct ReturnValue(pub Vec<(String, LuaValue)>);
@@ -180,7 +180,7 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
             lua_db(lua, &db_file, &notes_dir, |db| {
                 Ok(ReturnValue(vec![
                     ("log".to_string(), db.process_files()?.into_lua(lua)?),
-                    // ("err".to_string(), "whoops".into_lua(lua)?),
+                    ("err".to_string(), "whoops".into_lua(lua)?),
                 ]))
             })
         })?,
@@ -229,84 +229,24 @@ fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
             let pdf_path = Path::new(&pdf);
             let an_res = annotations::get_annotations(pdf_path).unwrap();
 
-            let mut to_append: Vec<String> = Vec::new();
-            to_append.push("## Annotations Export".to_string());
-            to_append.push("".to_string());
+            let output = display_outline_item(&an_res, 1);
 
-            for annotation in an_res.into_iter() {
-                if !to_append.last().map_or("", |s| s).is_empty() {
-                    to_append.push("".to_string());
-                }
-
-                match annotation.comment {
-                    annotations::Comment::Thought(s) => to_append.append(
-                        &mut format!("> [!THOUGHT] {}", s)
-                            .split("\n")
-                            .map(String::from)
-                            .collect(),
-                    ),
-                    annotations::Comment::Caveat(s) => to_append.append(
-                        &mut format!("> [!CAVEAT] {}", s)
-                            .split("\n")
-                            .map(String::from)
-                            .collect(),
-                    ),
-                    annotations::Comment::Question(s) => to_append.append(
-                        &mut format!("> [!QUESTION] {}", s)
-                            .split("\n")
-                            .map(String::from)
-                            .collect(),
-                    ),
-                    annotations::Comment::Summary(s) => {
-                        to_append.append(&mut s.split("\n").map(String::from).collect())
-                    }
-                    annotations::Comment::None => {
-                        to_append.pop();
-                    }
-                }
-                let highlighted: String = annotation
-                    .quote
-                    .split_whitespace()
-                    .map(str::trim)
-                    .intersperse(" ")
-                    .collect();
-
-                match annotation.quote_kind {
-                    annotations::AnnotType::Quote => {
-                        if !to_append.last().map_or("", |s| s).is_empty() {
-                            to_append.push("".to_string());
-                        }
-                        to_append.push(format!(
-                            "> [!QUOTE] {} {{p. {}}}",
-                            highlighted, annotation.page_num
-                        ));
-                        to_append.push("".to_string());
-                    }
-                    annotations::AnnotType::Emphasis => {
-                        to_append.push(format!("- =={}==", highlighted));
-                    }
-                    annotations::AnnotType::Point => {
-                        to_append.push(format!("- {}", highlighted));
-                    }
-                };
-            }
+            let to_append: Vec<String> = output.split("\n").map(String::from).collect();
 
             // let mut res: Vec<(String, mlua::Value)> = an_res
             //     .errs
             //     .into_iter()
             //     .map(|err| ("err".to_string(), err.to_string().into_lua(lua).unwrap()))
             //     .collect();
-            let mut res: Vec<(String, mlua::Value)> = Vec::new();
-            res.push((
+
+            Ok(ReturnValue(vec![(
                 "append".to_string(),
                 Table(vec![
                     ("contents".to_string(), to_append.into_lua(lua)?),
                     ("path".to_string(), note_path.into_lua(lua)?),
                 ])
                 .into_lua(lua)?,
-            ));
-
-            Ok(ReturnValue(res))
+            )]))
         })?,
     )?;
 

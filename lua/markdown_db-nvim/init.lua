@@ -1,4 +1,4 @@
--- local util = require "markdown_db-nvim.util"
+local util = require "markdown_db-nvim.util"
 local create = require "markdown_db-nvim.create"
 local buf = require "markdown_db-nvim.buf"
 local bin = require "markdown_db-nvim.binary"
@@ -6,13 +6,14 @@ local find = require "markdown_db-nvim.find"
 local pick = require "markdown_db-nvim.pick"
 local config = require "markdown_db-nvim.config"
 local comp = require "markdown_db-nvim.completion"
+local rfun = require "markdown_db-nvim.rfun"
 
 local M = {}
 
 M.setup = function(opts)
   config.set_opts(opts)
 
-  M.update()
+  M.update_async()
   comp.register_providers()
 
   vim.api.nvim_create_autocmd("BufEnter", {
@@ -33,16 +34,36 @@ M.setup = function(opts)
   vim.api.nvim_create_autocmd("BufWritePost", {
     pattern = "*.md",
     callback = function()
-      M.update()
+      M.update_async()
     end,
   })
 end
 
-M.update = function()
-  require("markdown_db-nvim.rfun").try(function()
-    return bin.update_index(config.current_vault.dir, config.current_vault.db)
+local main_thread_channel = vim.uv.new_async(vim.schedule_wrap(function(run, opts)
+  require("markdown_db-nvim.rfun").run(run, opts)
+end))
+
+local function update_worker(async_handle, dir, db, release_dir)
+  package.cpath = release_dir .. "/?.so;"
+  local res = require("markdown_db").update_index(dir, db)
+  for _, value in ipairs(res) do
+    async_handle:send(tostring(value.run), tostring(value.opts))
   end
-  )
+end
+
+M.update_async = function()
+  local success, thread_id = pcall(vim.uv.new_thread, update_worker, main_thread_channel, config.current_vault.dir, config.current_vault.db, util.get_paths().release_dir)
+
+  if not success then
+    vim.notify("Failed to spawn thread: " .. tostring(thread_id), vim.log.levels.ERROR)
+  end
+
+end
+
+M.update = function()
+  require("markdown_db-nvim.rfun").try(function ()
+    return bin.update_index(config.current_vault.dir, config.current_vault.db)
+  end)
 end
 
 function M.annotations()
@@ -56,7 +77,7 @@ function M.annotations()
       end
       )
       local asset_path = config.current_vault.dir ..
-      "/annotated/" .. vim.split(vim.fs.basename(vim.api.nvim_buf_get_name(0)), "%.")[1] .. ".pdf"
+          "/annotated/" .. vim.split(vim.fs.basename(vim.api.nvim_buf_get_name(0)), "%.")[1] .. ".pdf"
       vim.fn.rename(item._path, asset_path)
     end
   })
