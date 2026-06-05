@@ -8,7 +8,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 chrono = "0.4.44"
-duckdb = { version = "1.10500.0", features = ["bundled"] }
+duckdb = { version = "1.10500.0" }#, features = ["bundled"] }
 lopdf = "0.40.0"
 mlua = {version = "0.11", features = ["module", "luajit"]}
 pdf_oxide = "0.3.57"
