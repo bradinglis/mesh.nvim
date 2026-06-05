@@ -93,6 +93,7 @@ function M.try(f, callback)
   local p = require("mesh-nvim")
   if p.update_thread ~= nil then
     p.update_thread:join()
+    p.update_thread = nil
   end
   local v1, v2, v3 = pcall(f)
 
