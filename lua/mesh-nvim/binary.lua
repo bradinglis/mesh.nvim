@@ -11,7 +11,7 @@ local get = function(path)
   end
 
   local paths = util.get_paths()
-  package.cpath = paths.release_dir .. "/?.so;"
+  package.cpath = paths.release_dir .. "/lib?.so;"
   bin = require("mesh")
   return bin
 end

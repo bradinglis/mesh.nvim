@@ -8,7 +8,7 @@ M.get_paths = function ()
     return {
         plugin_root = plugin_root,
         data_dir = data_dir,
-        release_dir = plugin_root .. "/target/release",
+        release_dir = plugin_root .. '/target/release',
     }
 end
 
@@ -90,6 +90,10 @@ M.get_visual_selection = function()
 end
 
 function M.try(f, callback)
+  local p = require("mesh-nvim")
+  if p.update_thread ~= nil then
+    p.update_thread:join()
+  end
   local v1, v2, v3 = pcall(f)
 
   if not v1 then

@@ -6,7 +6,6 @@ local find = require "mesh-nvim.find"
 local pick = require "mesh-nvim.pick"
 local config = require "mesh-nvim.config"
 local comp = require "mesh-nvim.completion"
-local rfun = require "mesh-nvim.rfun"
 
 local M = {}
 
@@ -39,6 +38,7 @@ M.setup = function(opts)
   })
 end
 
+
 local main_thread_channel = vim.uv.new_async(vim.schedule_wrap(function(run, opts)
   require("mesh-nvim.rfun").run(run, opts)
 end))
@@ -52,10 +52,11 @@ local function update_worker(async_handle, dir, db, release_dir)
 end
 
 M.update_async = function()
-  local success, thread_id = pcall(vim.uv.new_thread, update_worker, main_thread_channel, config.current_vault.dir, config.current_vault.db, util.get_paths().release_dir)
+  local success
+  success, M.update_thread = pcall(vim.uv.new_thread, update_worker, main_thread_channel, config.current_vault.dir, config.current_vault.db, util.get_paths().release_dir)
 
   if not success then
-    vim.notify("Failed to spawn thread: " .. tostring(thread_id), vim.log.levels.ERROR)
+    vim.notify("Failed to spawn thread: " .. tostring(M.update_thread), vim.log.levels.ERROR)
   end
 
 end
