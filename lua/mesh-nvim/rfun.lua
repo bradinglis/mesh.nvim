@@ -10,7 +10,7 @@ local funs = {
     vim.notify(to_log)
   end,
   annotation = function(to_log)
-    dd(to_log)
+    vim.notiy(to_log)
   end,
   append = function(opts)
     local list = opts.contents
@@ -23,7 +23,7 @@ local funs = {
     vim.api.nvim_win_set_cursor(win, { lines + 1, 0 })
   end,
   err = function(to_log)
-    dd(to_log)
+    vim.notify(to_log)
   end,
   highlight = function(highlights)
     local ns_id = vim.api.nvim_create_namespace("mesh")

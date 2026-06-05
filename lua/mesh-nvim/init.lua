@@ -44,7 +44,7 @@ local main_thread_channel = vim.uv.new_async(vim.schedule_wrap(function(run, opt
 end))
 
 local function update_worker(async_handle, dir, db, release_dir)
-  package.cpath = release_dir .. "/?.so;"
+  package.cpath = release_dir .. "/lib?.so;"
   local res = require("mesh").update_index(dir, db)
   for _, value in ipairs(res) do
     async_handle:send(tostring(value.run), tostring(value.opts))
