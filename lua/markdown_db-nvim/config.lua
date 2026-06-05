@@ -1,4 +1,4 @@
-local util = require "markdown_db-nvim.util"
+local util = require "mesh-nvim.util"
 
 
 local M = {}

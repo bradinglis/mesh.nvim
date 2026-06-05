@@ -1,12 +1,12 @@
-local util = require "markdown_db-nvim.util"
-local create = require "markdown_db-nvim.create"
-local buf = require "markdown_db-nvim.buf"
-local bin = require "markdown_db-nvim.binary"
-local find = require "markdown_db-nvim.find"
-local pick = require "markdown_db-nvim.pick"
-local config = require "markdown_db-nvim.config"
-local comp = require "markdown_db-nvim.completion"
-local rfun = require "markdown_db-nvim.rfun"
+local util = require "mesh-nvim.util"
+local create = require "mesh-nvim.create"
+local buf = require "mesh-nvim.buf"
+local bin = require "mesh-nvim.binary"
+local find = require "mesh-nvim.find"
+local pick = require "mesh-nvim.pick"
+local config = require "mesh-nvim.config"
+local comp = require "mesh-nvim.completion"
+local rfun = require "mesh-nvim.rfun"
 
 local M = {}
 
@@ -40,12 +40,12 @@ M.setup = function(opts)
 end
 
 local main_thread_channel = vim.uv.new_async(vim.schedule_wrap(function(run, opts)
-  require("markdown_db-nvim.rfun").run(run, opts)
+  require("mesh-nvim.rfun").run(run, opts)
 end))
 
 local function update_worker(async_handle, dir, db, release_dir)
   package.cpath = release_dir .. "/?.so;"
-  local res = require("markdown_db").update_index(dir, db)
+  local res = require("mesh").update_index(dir, db)
   for _, value in ipairs(res) do
     async_handle:send(tostring(value.run), tostring(value.opts))
   end
@@ -61,7 +61,7 @@ M.update_async = function()
 end
 
 M.update = function()
-  require("markdown_db-nvim.rfun").try(function ()
+  require("mesh-nvim.rfun").try(function ()
     return bin.update_index(config.current_vault.dir, config.current_vault.db)
   end)
 end
@@ -72,7 +72,7 @@ function M.annotations()
     cwd = config.current_vault.dir .. "/annotated",
     confirm = function(picker, item)
       picker:close()
-      require("markdown_db-nvim.rfun").try(function()
+      require("mesh-nvim.rfun").try(function()
         return bin.get_annotations(item._path, current_file)
       end
       )

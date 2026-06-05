@@ -1,6 +1,6 @@
-local bin = require "markdown_db-nvim.binary"
-local config = require "markdown_db-nvim.config"
-local util = require "markdown_db-nvim.util"
+local bin = require "mesh-nvim.binary"
+local config = require "mesh-nvim.config"
+local util = require "mesh-nvim.util"
 
 local source = {}
 

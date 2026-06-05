@@ -1,6 +1,6 @@
-local util = require "markdown_db-nvim.util"
-local bin = require "markdown_db-nvim.binary"
-local config = require "markdown_db-nvim.config"
+local util = require "mesh-nvim.util"
+local bin = require "mesh-nvim.binary"
+local config = require "mesh-nvim.config"
 
 local M = {}
 
@@ -8,7 +8,7 @@ M.highlights = function()
   local current_buf = vim.api.nvim_get_current_buf()
   local lines = vim.api.nvim_buf_get_lines(current_buf, 0, -1, false)
 
-  require("markdown_db-nvim.rfun").try(function()
+  require("mesh-nvim.rfun").try(function()
     -- return bin.cursor_action(config.current_vault.dir, config.current_vault.db, lines, row, col)
     return bin.get_highlights(lines)
   end)
@@ -18,7 +18,7 @@ M.highlights = function()
   --   end,
   --   function(highlights)
   --     dd(highlights)
-  --     local ns_id = vim.api.nvim_create_namespace("markdown_db")
+  --     local ns_id = vim.api.nvim_create_namespace("mesh")
   --     vim.api.nvim_buf_clear_namespace(current_buf, ns_id, 0, -1)
   --
   --     for _, v in ipairs(highlights) do
@@ -69,7 +69,7 @@ M.get_cursor = function()
   local lines = vim.api.nvim_buf_get_lines(current_buf, 0, -1, false)
   local row, col = unpack(vim.api.nvim_win_get_cursor(current_win))
 
-  require("markdown_db-nvim.rfun").try(function()
+  require("mesh-nvim.rfun").try(function()
     return bin.cursor_action(config.current_vault.dir, config.current_vault.db, lines, row, col)
   end)
 end

@@ -1,7 +1,7 @@
-local bin = require "markdown_db-nvim.binary"
-local util = require "markdown_db-nvim.util"
-local pick = require "markdown_db-nvim.pick"
-local config = require "markdown_db-nvim.config"
+local bin = require "mesh-nvim.binary"
+local util = require "mesh-nvim.util"
+local pick = require "mesh-nvim.pick"
+local config = require "mesh-nvim.config"
 
 local M = {}
 

@@ -1,11 +1,11 @@
-local find = require("markdown_db-nvim.find")
-local util = require("markdown_db-nvim.util")
+local find = require("mesh-nvim.find")
+local util = require("mesh-nvim.util")
 
 local M = {}
 
 local funs = {
   tag = find.tag_notes,
-  open = require("markdown_db-nvim.buf").open,
+  open = require("mesh-nvim.buf").open,
   log = function(to_log)
     vim.notify(to_log)
   end,
@@ -26,7 +26,7 @@ local funs = {
     dd(to_log)
   end,
   highlight = function(highlights)
-    local ns_id = vim.api.nvim_create_namespace("markdown_db")
+    local ns_id = vim.api.nvim_create_namespace("mesh")
     vim.api.nvim_buf_clear_namespace(0, ns_id, 0, -1)
 
     for _, v in ipairs(highlights) do
@@ -47,7 +47,7 @@ local funs = {
 
 function M.run(cmd, opts, update, viz)
   if update then
-    require "markdown_db-nvim".update()
+    require "mesh-nvim".update()
   end
 
   funs[cmd](opts, viz)

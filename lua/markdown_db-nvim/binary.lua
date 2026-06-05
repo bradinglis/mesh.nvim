@@ -1,7 +1,7 @@
 -- TODO: copy fff rust handling 
 -- https://github.com/dmtrKovalenko/fff.nvim/blob/main/lua/fff/rust/init.lua
 -- https://github.com/dmtrKovalenko/fff.nvim/blob/main/lua/fff/download.lua
-local util = require("markdown_db-nvim.util")
+local util = require("mesh-nvim.util")
 
 local bin = {}
 
@@ -12,7 +12,7 @@ local get = function(path)
 
   local paths = util.get_paths()
   package.cpath = paths.release_dir .. "/?.so;"
-  bin = require("markdown_db")
+  bin = require("mesh")
   return bin
 end
 

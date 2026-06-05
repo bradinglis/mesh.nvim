@@ -1,6 +1,6 @@
-local util = require "markdown_db-nvim.util"
-local bin = require "markdown_db-nvim.binary"
-local config = require "markdown_db-nvim.config"
+local util = require "mesh-nvim.util"
+local bin = require "mesh-nvim.binary"
+local config = require "mesh-nvim.config"
 
 local M = {}
 
@@ -26,7 +26,7 @@ local function create(opts)
         vim.notify("Aborted")
         return
       end
-      require("markdown_db-nvim.rfun").try(function()
+      require("mesh-nvim.rfun").try(function()
         return bin.create_new(config.current_vault.dir, config.current_vault.db, opts.type, longName, input, opts.parent, content)
       end, true, opts.viz)
       util.try(function()

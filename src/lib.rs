@@ -171,7 +171,7 @@ impl<T> MyResult for Result<T> {
 }
 
 #[mlua::lua_module]
-fn markdown_db(lua: &Lua) -> LuaResult<LuaTable> {
+fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
     let exports = lua.create_table()?;
 
     exports.set(

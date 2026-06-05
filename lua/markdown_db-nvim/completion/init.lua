@@ -1,10 +1,10 @@
 local M = {}
 
 M.providers = {
-  { name = "md_tags", module = "markdown_db-nvim.completion.tags" },
-  { name = "md_links", module = "markdown_db-nvim.completion.links" },
-  { name = "md_anchors", module = "markdown_db-nvim.completion.anchors" },
-  { name = "md_frontmatter", module = "markdown_db-nvim.completion.frontmatter_refs" },
+  { name = "md_tags", module = "mesh-nvim.completion.tags" },
+  { name = "md_links", module = "mesh-nvim.completion.links" },
+  { name = "md_anchors", module = "mesh-nvim.completion.anchors" },
+  { name = "md_frontmatter", module = "mesh-nvim.completion.frontmatter_refs" },
 }
 
 local function add_provider(blink, provider_name, provider_module)

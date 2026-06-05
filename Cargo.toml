@@ -1,5 +1,5 @@
 [package]
-name = "markdown_db"
+name = "mesh"
 version = "0.1.0"
 edition = "2024"
 

@@ -1,5 +1,5 @@
 local snacks_picker = require "snacks.picker"
-local conf = require "markdown_db-nvim.config"
+local conf = require "mesh-nvim.config"
 
 local M = {}
 
@@ -183,7 +183,7 @@ function M.from_tags(tags)
       return ret
     end,
     confirm = function(picker, item)
-      require("markdown_db-nvim.find").tag_notes(item.tag)
+      require("mesh-nvim.find").tag_notes(item.tag)
       picker:close()
     end,
   }
