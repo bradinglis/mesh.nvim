@@ -12,7 +12,7 @@ local M = {}
 M.setup = function(opts)
   config.set_opts(opts)
 
-  M.update_async()
+  M.update()
   comp.register_providers()
 
   vim.api.nvim_create_autocmd("BufEnter", {
@@ -33,7 +33,7 @@ M.setup = function(opts)
   vim.api.nvim_create_autocmd("BufWritePost", {
     pattern = "*.md",
     callback = function()
-      M.update_async()
+      M.update()
     end,
   })
 end
