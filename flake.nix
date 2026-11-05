@@ -31,37 +31,56 @@
         pkgs.duckdb.lib
       ];
       version = manifest.version;
-      binary = rustPlatform.buildRustPackage {
-        inherit nativeBuildInputs buildInputs version;
-        pname = manifest.name;
-        src = pkgs.lib.cleanSource ./.;
-        cargoLock.lockFile = ./Cargo.lock;
+      src = pkgs.lib.fileset.toSource {
+        root = ./.;
+        fileset = pkgs.lib.fileset.unions [
+          ./Cargo.toml
+          ./Cargo.lock
+          ./sql
+          ./lua
+          ./src
+        ];
       };
     in
     {
-      packages.${system}.default = pkgs.vimUtils.buildVimPlugin {
-        pname = "mesh-nvim";
-        src = pkgs.lib.cleanSource ./.;
-        inherit version;
+      packages.${system}.default = (
+        let
+          binary = rustPlatform.buildRustPackage {
+            pname = "mesh-nvim-lib";
+            inherit
+              nativeBuildInputs
+              buildInputs
+              version
+              src
+              ;
+            dependencies = [
+              pkgs.duckdb.lib
+            ];
+            cargoLock.lockFile = ./Cargo.lock;
+          };
+        in
+        pkgs.vimUtils.buildVimPlugin {
+          pname = "mesh-nvim";
+          inherit version src;
 
-        postPatch = ''
-          mkdir -p target/release
-          cp -vf ${binary}/lib/libmesh.so target/release/libmesh.so
-        '';
+          postPatch = ''
+            mkdir -p target/release
+            cp -vf ${binary}/lib/libmesh.so target/release/libmesh.so
+          '';
 
-        nvimSkipModule = [
-          "empty_config"
-        ];
+          nvimSkipModule = [
+            "empty_config"
+          ];
 
-        dependencies = [
-          pkgs.duckdb.lib
-          pkgs.vimPlugins.snacks-nvim
-        ];
-      };
+          dependencies = [
+            pkgs.duckdb.lib
+            pkgs.vimPlugins.snacks-nvim
+          ];
+        }
+      );
 
       devShells.default = pkgs.mkShell {
         inherit nativeBuildInputs buildInputs;
-
         shellHook = /* bash */ ''
           echo ""
           echo -e "\e[1;38;5;208m | Rust environment\e[0m"
