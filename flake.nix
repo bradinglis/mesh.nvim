@@ -3,61 +3,71 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     rust-overlay.url = "github:oxalica/rust-overlay";
-    utils.url = "github:numtide/flake-utils";
   };
-
   outputs =
     {
       self,
       nixpkgs,
-      utils,
       rust-overlay,
     }:
-    utils.lib.eachDefaultSystem (
-      system:
-      let
-        pkgs = import nixpkgs {
-          inherit system;
-          overlays = [ (import rust-overlay) ];
-        };
+    let
+      # Change this to your system architecture if not on x86_64 Linux
+      system = "x86_64-linux";
+      overlays = [ (import rust-overlay) ];
+      pkgs = import nixpkgs { inherit system overlays; };
+      manifest = (pkgs.lib.importTOML ./Cargo.toml).package;
+      nightlyToolchain = pkgs.rust-bin.selectLatestNightlyWith (env: env.default);
 
-        mingwTarget = pkgs.pkgsCross.mingwW64;
-        rustToolchain = pkgs.rust-bin.stable.latest.default.override {
-          extensions = [
-            "rust-src"
-            "rust-analyzer"
-          ];
-        };
-      in
-      {
-        devShells.default = pkgs.mkShell {
-          nativeBuildInputs = [
-            mingwTarget.stdenv.cc
-          ];
-          buildInputs = [
-            rustToolchain
-            mingwTarget.windows.pthreads
-            mingwTarget.stdenv.cc
-            mingwTarget.openssl
-          ];
+      # Create a custom rustPlatform with the nightly toolchain
+      rustPlatform = pkgs.makeRustPlatform {
+        cargo = nightlyToolchain;
+        rustc = nightlyToolchain;
+      };
+      nativeBuildInputs = [
+        rustPlatform.bindgenHook
+        pkgs.duckdb.lib
+      ];
+      buildInputs = [
+        pkgs.duckdb.lib
+      ];
+      version = manifest.version;
+      binary = rustPlatform.buildRustPackage {
+        inherit nativeBuildInputs buildInputs version;
+        pname = manifest.name;
+        src = pkgs.lib.cleanSource ./.;
+        cargoLock.lockFile = ./Cargo.lock;
+      };
+    in
+    {
+      packages.${system}.default = pkgs.vimUtils.buildVimPlugin {
+        pname = "mesh-nvim";
+        src = pkgs.lib.cleanSource ./.;
+        inherit version;
 
-          RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
+        postPatch = ''
+          mkdir -p target/release
+          cp -vf ${binary}/lib/libmesh.so target/release/libmesh.so
+        '';
 
-          # Environment variables instructing Cargo exactly which linker to use
-          CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER = "${mingwTarget.stdenv.cc}/bin/${mingwTarget.stdenv.cc.targetPrefix}cc";
-          TARGET_CC = "${mingwTarget.stdenv.cc}/bin/${mingwTarget.stdenv.cc.targetPrefix}cc";
-          # Optional: Fixes missing native library paths during cross-compilation
-          CARGO_TARGET_X86_64_PC_WINDOWS_GNU_RUSTFLAGS = "-L native=${mingwTarget.windows.pthreads}/lib";
-          CARGO_BUILD_TARGET = "x86_64-pc-windows-gnu";
+        nvimSkipModule = [
+          "empty_config"
+        ];
 
+        dependencies = [
+          pkgs.duckdb.lib
+          pkgs.vimPlugins.snacks-nvim
+        ];
+      };
 
-          shellHook = /* bash */ ''
-            echo ""
-            echo -e "\e[1;38;5;208m | Rust environment\e[0m"
-            cargo version
-          '';
+      devShells.default = pkgs.mkShell {
+        inherit nativeBuildInputs buildInputs;
 
-        };
-      }
-    );
+        shellHook = /* bash */ ''
+          echo ""
+          echo -e "\e[1;38;5;208m | Rust environment\e[0m"
+          cargo version
+        '';
+
+      };
+    };
 }

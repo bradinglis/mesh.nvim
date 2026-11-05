@@ -23,7 +23,7 @@ use std::{
 };
 use thiserror::Error;
 
-use crate::{annotations::display_outline_item, note::RefNode};
+use crate::{note::RefNode};
 
 pub struct Table(pub Vec<(String, LuaValue)>);
 pub struct ReturnValue(pub Vec<(String, LuaValue)>);
@@ -138,8 +138,8 @@ pub enum MyError {
     Mlua(#[from] mlua::Error),
     #[error("Json error: {0}")]
     Json(#[from] serde_json::Error),
-    #[error("Pdf error: {0}")]
-    Pdf(#[from] pdf_oxide::Error),
+    // #[error("Pdf error: {0}")]
+    // Pdf(#[from] pdf_oxide::Error),
     #[error("Utf16 error: {0}")]
     Utf16(#[from] FromUtf16Error),
     #[error("Utf8 error: {0}")]
@@ -229,9 +229,10 @@ fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
             let pdf_path = Path::new(&pdf);
             let an_res = annotations::get_annotations(pdf_path).unwrap();
 
-            let output = display_outline_item(&an_res, 1);
+            // let output = display_outline_item(&an_res, 1);
 
-            let to_append: Vec<String> = output.split("\n").map(String::from).collect();
+            // let to_append: Vec<String> = output.split("\n").map(String::from).collect();
+            let to_append: Vec<String> = Vec::new();
 
             // let mut res: Vec<(String, mlua::Value)> = an_res
             //     .errs
