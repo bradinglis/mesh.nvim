@@ -138,7 +138,6 @@ impl BodyParsing {
                     if let Some(x) = self.id.clone() {
                         heading_link.push_str(x.as_str());
                     } else {
-
                         heading_link.push_str(&NoteId::derive(heading).to_owned());
                     }
                 },
@@ -149,7 +148,7 @@ impl BodyParsing {
                     } else {
                         heading_link.push('#');
                     }
-                    heading_link.push_str(&NoteId::derive(heading).to_owned());
+                    heading_link.push_str(&&NoteId::derive_subheading(heading).to_owned());
                 },
                 x => {
                     if let Some(x) = self.parent_anchor(x - 1).map(|x| x.heading_link) {
@@ -158,7 +157,7 @@ impl BodyParsing {
                     } else {
                         heading_link.push('#');
                     }
-                    heading_link.push_str(&NoteId::derive(heading).to_owned());
+                    heading_link.push_str(&NoteId::derive_subheading(heading).to_owned());
                 }
             }
 

@@ -78,7 +78,6 @@ impl Paths {
             self.deleted.push(x);
         }
 
-        // Somehow pass this back to nvim...
         let mut message: Vec<String> = vec!["Updated Index: ".to_string()];
         for m in self.modified.clone() {
             message.push(format!("Modified: {}", m.to_string_lossy()))
