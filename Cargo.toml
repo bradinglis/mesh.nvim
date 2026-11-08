@@ -10,6 +10,7 @@ crate-type = ["cdylib"]
 chrono = "0.4.44"
 duckdb = { version = "1.10500.0" }#, features = ["bundled"] }
 mlua = {version = "0.11", features = ["module", "luajit"]}
+pdf_oxide = "0.3.78"
 rapidhash = "4.4.1"
 regex = "1.12.3"
 serde = {version = "1.0.228", features = ["derive"] }

@@ -421,14 +421,18 @@ impl Db {
 
         let (to_remove, to_add, mut message) = Paths::go(self)?;
         if !(to_remove.is_empty() && to_add.is_empty()) {
-            self.update_notes(to_add, to_remove)?;
+            match self.update_notes(to_add, to_remove) {
+                Ok(mut x) => message.append(&mut x),
+                Err(e) => message.push(format!("Error: {}", e)),
+            }
         }
 
         message.push(format!("Time Taken: {}s", start.elapsed().as_secs_f64()));
         Ok(message.join("\n"))
     }
 
-    fn update_notes(&self, to_add: Vec<note::Note>, to_remove: Vec<String>) -> Result<()> {
+    fn update_notes(&self, to_add: Vec<note::Note>, to_remove: Vec<String>) -> Result<Vec<String>> {
+        let mut res = Vec::new();
         if !to_remove.is_empty() {
             let placeholders: Vec<&str> = std::iter::repeat_n("?", to_remove.len()).collect();
             self.connection.execute(
@@ -567,7 +571,7 @@ impl Db {
             app_headings.flush()?;
         };
 
-        Ok(())
+        Ok(res)
     }
 
     pub fn clear(&self) -> Result<()> {

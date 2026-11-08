@@ -18,6 +18,7 @@ local funs = {
     local buf = vim.fn.bufadd(opts.path)
     vim.cmd(("buffer %d"):format(buf))
     local lines = vim.api.nvim_buf_line_count(buf)
+    vim.notify(list)
     vim.cmd("norm! zzzv")
     vim.api.nvim_buf_set_lines(buf, -1, -1, false, list)
     vim.api.nvim_win_set_cursor(win, { lines + 1, 0 })

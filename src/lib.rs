@@ -23,7 +23,8 @@ use std::{
 };
 use thiserror::Error;
 
-use crate::{note::RefNode};
+use crate::note::RefNode;
+use crate::annotations::display_outline_item;
 
 pub struct Table(pub Vec<(String, LuaValue)>);
 pub struct ReturnValue(pub Vec<(String, LuaValue)>);
@@ -79,6 +80,22 @@ impl Deref for NoteId {
 }
 
 impl NoteId {
+    fn derive_subheading(value: &str) -> Self {
+        NoteId(
+            value
+                .split_whitespace()
+                .filter_map(|word| {
+                    Some(
+                        word.to_lowercase()
+                            .chars()
+                            .filter(|y| *y == '-' || y.is_ascii_alphanumeric())
+                            .collect(),
+                    )
+                })
+                .collect::<Vec<String>>()
+                .join("-"),
+        )
+    }
     fn derive(value: &str) -> Self {
         NoteId(
             value
@@ -138,8 +155,8 @@ pub enum MyError {
     Mlua(#[from] mlua::Error),
     #[error("Json error: {0}")]
     Json(#[from] serde_json::Error),
-    // #[error("Pdf error: {0}")]
-    // Pdf(#[from] pdf_oxide::Error),
+    #[error("Pdf error: {0}")]
+    Pdf(#[from] pdf_oxide::Error),
     #[error("Utf16 error: {0}")]
     Utf16(#[from] FromUtf16Error),
     #[error("Utf8 error: {0}")]
@@ -178,10 +195,14 @@ fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
         "update_index",
         lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
             lua_db(lua, &db_file, &notes_dir, |db| {
-                Ok(ReturnValue(vec![
-                    ("log".to_string(), db.process_files()?.into_lua(lua)?),
-                    ("err".to_string(), "whoops".into_lua(lua)?),
-                ]))
+                // let s = db.process_files();
+                match db.process_files() {
+                    Err(e) => Ok(ReturnValue(vec![(
+                        "err".to_string(),
+                        e.to_string().into_lua(lua)?,
+                    )])),
+                    Ok(x) => Ok(ReturnValue(vec![("log".to_string(), x.into_lua(lua)?)])),
+                }
             })
         })?,
     )?;
@@ -229,10 +250,10 @@ fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
             let pdf_path = Path::new(&pdf);
             let an_res = annotations::get_annotations(pdf_path).unwrap();
 
-            // let output = display_outline_item(&an_res, 1);
+            let output = display_outline_item(&an_res, 1);
 
-            // let to_append: Vec<String> = output.split("\n").map(String::from).collect();
-            let to_append: Vec<String> = Vec::new();
+            let to_append: Vec<String> = output.split("\n").map(String::from).collect();
+            // let to_append: Vec<String> = Vec::new();
 
             // let mut res: Vec<(String, mlua::Value)> = an_res
             //     .errs
@@ -566,5 +587,6 @@ impl IntoLua for Note {
         t.set("authors", self.authors)?;
         t.set("links", self.links)?;
         Ok(LuaValue::Table(t))
+
     }
 }
