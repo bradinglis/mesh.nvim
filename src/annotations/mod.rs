@@ -15,6 +15,9 @@ use pdf_oxide::pipeline::TextPipeline;
 use pdf_oxide::pipeline::TextPipelineConfig;
 use serde::Deserialize;
 use std::cmp::Ordering;
+
+pub(crate) mod highlights;
+
 #[derive(Debug)]
 pub struct MyOutlineItem {
     pub title: String,
@@ -55,14 +58,43 @@ pub enum AnnotType {
     Point,
 }
 
-impl Display for AnnotType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(match self {
-            AnnotType::Quote => "quote",
-            AnnotType::Emphasis => "emphasis",
-            AnnotType::Point => "point",
+struct Page {
+    chars: Vec<TextChar>,
+    body_font: String,
+    annotations: Vec<Annotation>,
+}
+
+impl Page {
+    pub fn init(doc: &pdf_oxide::PdfDocument, page_num: usize) -> Result<Page, pdf_oxide::Error> {
+        let chars = doc.extract_chars(page_num)?;
+        let body_font = highlights::dominant_font(&chars);
+        Ok(Page {
+            chars,
+            body_font,
         })
     }
+    pub fn get_annotation(&self, annot: pdf_oxide:annotations::Annotation) -> Result<Annotation, pdf_oxide::Error> {
+        let chars = doc.extract_chars(page_num)?;
+        let body_font = dominant_font(&chars);
+        Ok(Page {
+            chars,
+            body_font,
+        })
+    }
+}
+
+fn get_annotations(path: &std::path::Path) -> Result<Vec<String>, pdf_oxide::Error> {
+    let doc = pdf_oxide::PdfDocument::open(path)?;
+
+    let mut res = Vec::new();
+    for page_num in doc.page_indices() {
+        let page = Page::init(&doc, page_num)?;
+        for annot in doc.get_annotations(page_num)? {
+            let a = page.get_annotation(annot)? 
+        }
+    }
+
+    Ok(res)
 }
 
 pub fn get_annotations(path: &std::path::Path) -> crate::Result<MyOutlineItem> {
@@ -70,112 +102,11 @@ pub fn get_annotations(path: &std::path::Path) -> crate::Result<MyOutlineItem> {
 
     let mut res = Vec::new();
     for page_num in doc.page_indices() {
-        let annots = doc.get_annotations(page_num)?;
-        for annot in annots {
-            if annot.subtype_enum == AnnotationSubtype::Highlight {
-                let quote = if let Some(quads) = annot.quad_points {
-                    let mut rects = Vec::new();
-                    for [_, _, x1, y1, x0, y0, _, _] in quads {
-                        rects.push(Rect::from_points(
-                            x0 as f32, y0 as f32, x1 as f32, y1 as f32,
-                        ));
-                    }
-                    let page_chars = doc.extract_chars(page_num)?;
+        let page = Page::init(&doc, page_num)?;
 
-                    let lines: Vec<Vec<TextChar>> = rects
-                        .into_iter()
-                        .map(|rect| {
-                            let mut line = page_chars.filter_by_rect(
-                                &rect,
-                                pdf_oxide::layout::RectFilterMode::MinOverlap(0.5),
-                            );
-                            line.sort_by(|x, y| {
-                                if x.bbox.x > y.bbox.x {
-                                    Ordering::Greater
-                                } else if x.bbox.x < y.bbox.x {
-                                    Ordering::Less
-                                } else {
-                                    Ordering::Equal
-                                }
-                            });
-                            line
-                        })
-                        .collect();
-                    let mut chars: Vec<TextChar> = Vec::new();
-
-                    for mut line in lines {
-                        if let Some(last) = chars.last() {
-                            if last.char == '-' {
-                                chars.pop();
-                            } else if last.char != ' ' {
-                                if is_italic(last) || is_bold(last) {
-                                    let mut c = line.first().unwrap().clone();
-                                    c.char = ' ';
-                                    chars.push(c);
-                                } else {
-                                    let mut c = last.clone();
-                                    c.char = ' ';
-                                    chars.push(c);
-                                }
-                            }
-                        }
-                        chars.append(&mut line);
-                    }
-
-                    let spans: Vec<Span> = chars
-                        .chunk_by(|a, b| is_plain(a) == is_plain(b))
-                        .map(|x| {
-                            let s: String = x.iter().map(|x| x.char).collect();
-                            if is_italic(&x[0]) {
-                                Span::Italic(s)
-                            } else if is_bold(&x[0]) {
-                                Span::Bold(s)
-                            } else {
-                                Span::Plain(s)
-                            }
-                        })
-                        .collect();
-                    spans_to_markdown(spans)
-                } else {
-                    "".to_string()
-                };
-
-                let comment = match annot.contents {
-                    Some(x) if x.starts_with("Q: ") => {
-                        Comment::Question(x.trim_prefix("Q: ").to_string())
-                    }
-                    Some(x) if x.starts_with("T: ") => {
-                        Comment::Thought(x.trim_prefix("T: ").to_string())
-                    }
-                    Some(x) if x.starts_with("C: ") => {
-                        Comment::Caveat(x.trim_prefix("C: ").to_string())
-                    }
-                    Some(x) if !x.is_empty() => Comment::Summary(x),
-                    _ => Comment::None,
-                };
-
-                let quote_kind = if let Some(color) = annot.color {
-                    let r = color[0];
-                    let g = color[1];
-                    let b = color[2];
-
-                    if r == 1.0 {
-                        AnnotType::Quote
-                    } else if b == 1.0 {
-                        AnnotType::Point
-                    } else {
-                        AnnotType::Emphasis
-                    }
-                } else {
-                    AnnotType::Emphasis
-                };
-
-                res.push(Annotation {
-                    comment,
-                    page_num,
-                    quote_kind,
-                    quote,
-                });
+        for annot in doc.get_annotations(page_num)? {
+            if let Some(text) = page.get_highlight(annot)? {
+                res.push(text);
             }
         }
     }
