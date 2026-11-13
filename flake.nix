@@ -47,7 +47,6 @@
         inherit nativeBuildInputs buildInputs;
         dependencies = [
           pkgs.duckdb.lib
-          pkgs.vimPlugins.snacks-nvim
         ];
         shellHook = /* bash */ ''
           echo ""
