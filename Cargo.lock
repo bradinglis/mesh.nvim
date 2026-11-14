@@ -1609,10 +1609,7 @@ dependencies = [
  "pdf_oxide",
  "rapidhash",
  "regex",
- "serde",
- "serde_json",
  "thiserror",
- "unicode-bom",
 ]
 
 [[package]]
@@ -2942,12 +2939,6 @@ name = "unicode-bidi"
 version = "0.3.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5c1cb5db39152898a79168971543b1cb5020dff7fe43c8dc468b0885f5e29df5"
-
-[[package]]
-name = "unicode-bom"
-version = "2.0.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7eec5d1121208364f6793f7d2e222bf75a915c19557537745b195b253dd64217"
 
 [[package]]
 name = "unicode-ident"

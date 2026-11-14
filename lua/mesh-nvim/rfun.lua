@@ -3,65 +3,71 @@ local util = require("mesh-nvim.util")
 
 local M = {}
 
+---@param message any
+local function notify(message)
+  vim.notify(message)
+end
+
 local funs = {
   tag = find.tag_notes,
   open = require("mesh-nvim.buf").open,
-  log = function(to_log)
-    vim.notify(to_log)
-  end,
-  annotation = function(to_log)
-    vim.notiy(to_log)
-  end,
+  log = notify,
+  annotation = notify,
+  err = notify,
+  ---@param opts { path: string, contents: string[] }
   append = function(opts)
     local list = opts.contents
     local win = vim.api.nvim_get_current_win()
     local buf = vim.fn.bufadd(opts.path)
-    vim.cmd(("buffer %d"):format(buf))
+    vim.api.nvim_win_set_buf(win, buf)
+
     local lines = vim.api.nvim_buf_line_count(buf)
-    vim.notify(list)
-    vim.cmd("norm! zzzv")
     vim.api.nvim_buf_set_lines(buf, -1, -1, false, list)
     vim.api.nvim_win_set_cursor(win, { lines + 1, 0 })
+    vim.cmd("normal! zzzv")
   end,
-  err = function(to_log)
-    vim.notify(to_log)
-  end,
+  ---@param highlights { line: integer, start_col: integer, end_col: integer, hl: string }[]
   highlight = function(highlights)
     local ns_id = vim.api.nvim_create_namespace("mesh")
     vim.api.nvim_buf_clear_namespace(0, ns_id, 0, -1)
 
-    for _, v in ipairs(highlights) do
-      vim.api.nvim_buf_set_extmark(
-        0,
-        ns_id,
-        v.line - 1,
-        v.start_col,
-        {
-          end_row = v.line - 1, -- End line (same as start for single line)
-          end_col = v.end_col,  -- End column (highlights characters from col 0 to 4)
-          hl_group = v.hl,      -- The highlight group to use
-        })
+    for _, highlight in ipairs(highlights) do
+      vim.api.nvim_buf_set_extmark(0, ns_id, highlight.line - 1, highlight.start_col, {
+        end_row = highlight.line - 1,
+        end_col = highlight.end_col,
+        hl_group = highlight.hl,
+      })
     end
-  end
-
+  end,
 }
 
+---@param cmd string
+---@param opts any
+---@param update? boolean
+---@param viz? any
 function M.run(cmd, opts, update, viz)
   if update then
     require "mesh-nvim".update()
   end
 
-  funs[cmd](opts, viz)
+  local run = funs[cmd]
+  if not run then
+    vim.notify(("mesh: unknown action '%s'"):format(cmd), vim.log.levels.ERROR)
+    return
+  end
+
+  run(opts, viz)
 end
 
+---@param f fun(): any
+---@param update? boolean
+---@param viz? any
 function M.try(f, update, viz)
-  util.try(f,
-    function(x)
-      for _, value in ipairs(x) do
-        M.run(value.run, value.opts, update, viz)
-      end
+  util.try(f, function(results)
+    for _, value in ipairs(results) do
+      M.run(value.run, value.opts, update, viz)
     end
-  )
+  end)
 end
 
 return M

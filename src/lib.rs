@@ -1,9 +1,3 @@
-#![feature(trim_prefix_suffix)]
-#![feature(str_from_utf16_endian)]
-#![feature(try_trait_v2)]
-#![feature(iter_intersperse)]
-#![feature(string_from_utf8_lossy_owned)]
-
 pub mod annotations;
 pub mod create;
 pub mod db;
@@ -16,15 +10,11 @@ pub mod trier;
 
 pub use db::DbValue;
 pub use mlua::prelude::*;
-pub use std::{fmt::Debug, ops::Deref, path::Path};
-use std::{
-    string::{FromUtf8Error, FromUtf16Error},
-    time::Instant,
-};
+pub use std::{ops::Deref, path::Path};
 use thiserror::Error;
 
-use crate::note::RefNode;
 use crate::annotations::display_outline_item;
+use crate::note::{NoteType, RefNode};
 
 pub struct Table(pub Vec<(String, LuaValue)>);
 pub struct ReturnValue(pub Vec<(String, LuaValue)>);
@@ -32,28 +22,24 @@ pub struct NoteId(String);
 
 impl IntoLua for Table {
     fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
-        let items = self.to_owned();
-
-        let t = lua.create_table()?;
-        for (k, v) in items.into_iter() {
-            t.set(k, v)?
+        let table = lua.create_table()?;
+        for (key, value) in self.0 {
+            table.set(key, value)?;
         }
-
-        Ok(LuaValue::Table(t))
+        Ok(LuaValue::Table(table))
     }
 }
 
 impl IntoLua for ReturnValue {
     fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
-        let items = self.to_owned();
-        let r = lua.create_table()?;
-        for (k, (s, t)) in items.into_iter().enumerate() {
-            let st = lua.create_table()?;
-            st.set("run", s)?;
-            st.set("opts", t)?;
-            r.set(k + 1, st)?;
+        let result = lua.create_table()?;
+        for (index, (run, opts)) in self.0.into_iter().enumerate() {
+            let entry = lua.create_table()?;
+            entry.set("run", run)?;
+            entry.set("opts", opts)?;
+            result.set(index + 1, entry)?;
         }
-        Ok(LuaValue::Table(r))
+        Ok(LuaValue::Table(result))
     }
 }
 
@@ -72,50 +58,38 @@ impl Deref for ReturnValue {
     }
 }
 
-impl Deref for NoteId {
-    type Target = String;
-    fn deref(&self) -> &Self::Target {
-        &self.0
+impl NoteId {
+    fn derive_subheading(value: &str) -> Self {
+        Self(derive_slug(value, false))
+    }
+
+    fn derive(value: &str) -> Self {
+        Self(derive_slug(value, true))
     }
 }
 
-impl NoteId {
-    fn derive_subheading(value: &str) -> Self {
-        NoteId(
-            value
-                .split_whitespace()
-                .filter_map(|word| {
-                    Some(
-                        word.to_lowercase()
-                            .chars()
-                            .filter(|y| *y == '-' || y.is_ascii_alphanumeric())
-                            .collect(),
-                    )
-                })
-                .collect::<Vec<String>>()
-                .join("-"),
-        )
+impl std::fmt::Display for NoteId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
     }
-    fn derive(value: &str) -> Self {
-        NoteId(
-            value
-                .split_whitespace()
-                .filter_map(|word| {
-                    if word.starts_with(|ch: char| ch.is_lowercase()) {
-                        None
-                    } else {
-                        Some(
-                            word.to_lowercase()
-                                .chars()
-                                .filter(|y| *y == '-' || y.is_ascii_alphanumeric())
-                                .collect(),
-                        )
-                    }
-                })
-                .collect::<Vec<String>>()
-                .join("-"),
-        )
-    }
+}
+
+/// Turn a title into a stable slug.
+///
+/// Note ids deliberately drop leading-lowercase words, while subheading ids
+/// keep every word.
+fn derive_slug(value: &str, require_uppercase: bool) -> String {
+    value
+        .split_whitespace()
+        .filter(|word| !require_uppercase || !word.starts_with(char::is_lowercase))
+        .map(|word| {
+            word.to_lowercase()
+                .chars()
+                .filter(|ch| *ch == '-' || ch.is_ascii_alphanumeric())
+                .collect::<String>()
+        })
+        .collect::<Vec<_>>()
+        .join("-")
 }
 
 pub type Results<T> = results::Results<T, MyError>;
@@ -125,23 +99,15 @@ pub trait ToNoteId {
     fn to_note_id(self) -> String;
 }
 
+impl ToNoteId for &str {
+    fn to_note_id(self) -> String {
+        derive_slug(self, true)
+    }
+}
+
 impl ToNoteId for String {
     fn to_note_id(self) -> String {
-        self.split_whitespace()
-            .filter_map(|word| {
-                if word.starts_with(|ch: char| ch.is_lowercase()) {
-                    None
-                } else {
-                    Some(
-                        word.to_lowercase()
-                            .chars()
-                            .filter(|y| *y == '-' || y.is_ascii_alphanumeric())
-                            .collect(),
-                    )
-                }
-            })
-            .collect::<Vec<String>>()
-            .join("-")
+        derive_slug(&self, true)
     }
 }
 
@@ -153,14 +119,8 @@ pub enum MyError {
     DuckDb(#[from] duckdb::Error),
     #[error("MLua error: {0}")]
     Mlua(#[from] mlua::Error),
-    #[error("Json error: {0}")]
-    Json(#[from] serde_json::Error),
     #[error("Pdf error: {0}")]
     Pdf(#[from] pdf_oxide::Error),
-    #[error("Utf16 error: {0}")]
-    Utf16(#[from] FromUtf16Error),
-    #[error("Utf8 error: {0}")]
-    Utf8(#[from] FromUtf8Error),
     #[error("Message: {0}")]
     String(String),
     #[error("File error: {0}")]
@@ -177,14 +137,40 @@ pub trait MyResult {
 
 impl<T> MyResult for Result<T> {
     fn i(self) -> Self {
-        match self {
-            Err(y) => {
-                eprintln!("Error: {}", y);
-                Err(y)
-            }
-            x => x,
-        }
+        self.map_err(|error| {
+            eprintln!("Error: {error}");
+            error
+        })
     }
+}
+
+fn highlight(
+    lua: &Lua,
+    group: &str,
+    (line, start_col, end_col): (usize, usize, usize),
+) -> LuaResult<LuaValue> {
+    Table(vec![
+        ("hl".to_string(), group.into_lua(lua)?),
+        ("line".to_string(), line.into_lua(lua)?),
+        ("start_col".to_string(), start_col.into_lua(lua)?),
+        ("end_col".to_string(), end_col.into_lua(lua)?),
+    ])
+    .into_lua(lua)
+}
+
+fn open_action(lua: &Lua, path: String, replace: Option<String>) -> Result<ReturnValue> {
+    let mut fields = vec![
+        ("path".to_string(), path.into_lua(lua)?),
+        ("row".to_string(), 11.into_lua(lua)?),
+    ];
+    if let Some(replace) = replace {
+        fields.push(("replace".to_string(), replace.into_lua(lua)?));
+    }
+
+    Ok(ReturnValue(vec![(
+        "open".to_string(),
+        Table(fields).into_lua(lua)?,
+    )]))
 }
 
 #[mlua::lua_module]
@@ -248,18 +234,10 @@ fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
         "get_annotations",
         lua.create_function(|lua, (pdf, note_path): (String, String)| {
             let pdf_path = Path::new(&pdf);
-            let an_res = annotations::get_annotations(pdf_path).unwrap();
+            let an_res = annotations::get_annotations(pdf_path).into_lua_err()?;
 
             let output = display_outline_item(&an_res, 1);
-
-            let to_append: Vec<String> = output.split("\n").map(String::from).collect();
-            // let to_append: Vec<String> = Vec::new();
-
-            // let mut res: Vec<(String, mlua::Value)> = an_res
-            //     .errs
-            //     .into_iter()
-            //     .map(|err| ("err".to_string(), err.to_string().into_lua(lua).unwrap()))
-            //     .collect();
+            let to_append: Vec<String> = output.split('\n').map(String::from).collect();
 
             Ok(ReturnValue(vec![(
                 "append".to_string(),
@@ -291,7 +269,7 @@ fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
     exports.set(
         "id_gen",
         lua.create_function(|lua, title: String| {
-            Ok(NoteId::derive(&title).to_owned().into_lua(lua))
+            Ok(NoteId::derive(&title).to_string().into_lua(lua))
         })?,
     )?;
 
@@ -308,82 +286,42 @@ fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
                 Option<String>,
                 Option<Vec<String>>,
             )| {
-                lua_db(lua, &db_file, &notes_dir, |db| match note_type.as_str() {
-                    "source" => {
-                        let parent = db.get_frontmatter(&parent_id.ok_or(MyError::OtherError)?)?;
-                        let (path, new_id) =
-                            create::source(parent, &id, &title, &notes_dir, contents)?;
+                lua_db(
+                    lua,
+                    &db_file,
+                    &notes_dir,
+                    |db| match NoteType::from_string(&note_type) {
+                        NoteType::Source => {
+                            let parent = db.get_frontmatter(
+                                parent_id.as_deref().ok_or(MyError::OtherError)?,
+                            )?;
+                            let (path, new_id) =
+                                create::source(parent, &id, &title, &notes_dir, contents)?;
 
-                        Ok(ReturnValue(vec![(
-                            "open".to_string(),
-                            Table(vec![
-                                ("path".to_string(), path.into_lua(lua)?),
-                                ("row".to_string(), 11.into_lua(lua)?),
-                                (
-                                    "replace".to_string(),
-                                    format!("[[{new_id}|{title}]]").into_lua(lua)?,
-                                ),
-                            ])
-                            .into_lua(lua)?,
-                        )]))
-                    }
-                    "author" => {
-                        let (path, _) = create::author(&id, &title, &notes_dir, contents)?;
-
-                        Ok(ReturnValue(vec![(
-                            "open".to_string(),
-                            Table(vec![
-                                ("path".to_string(), path.into_lua(lua)?),
-                                ("row".to_string(), 11.into_lua(lua)?),
-                            ])
-                            .into_lua(lua)?,
-                        )]))
-                    }
-                    "note" => {
-                        let parent = db.get_frontmatter(&parent_id.ok_or(MyError::OtherError)?)?;
-                        let parent_type = parent.note_type.clone();
-
-                        let (path, new_id) =
-                            create::note(parent, &id, &title, &notes_dir, contents)?;
-
-                        if parent_type == "note" {
-                            Ok(ReturnValue(vec![(
-                                "open".to_string(),
-                                Table(vec![
-                                    ("path".to_string(), path.into_lua(lua)?),
-                                    ("row".to_string(), 11.into_lua(lua)?),
-                                    (
-                                        "replace".to_string(),
-                                        format!("[[{new_id}|{title}]]").into_lua(lua)?,
-                                    ),
-                                ])
-                                .into_lua(lua)?,
-                            )]))
-                        } else {
-                            Ok(ReturnValue(vec![(
-                                "open".to_string(),
-                                Table(vec![
-                                    ("path".to_string(), path.into_lua(lua)?),
-                                    ("row".to_string(), 11.into_lua(lua)?),
-                                ])
-                                .into_lua(lua)?,
-                            )]))
+                            open_action(lua, path, Some(format!("[[{new_id}|{title}]]")))
                         }
-                    }
-                    "journal" => {
-                        let (path, _) = create::journal(&notes_dir, contents)?;
+                        NoteType::Author => {
+                            let (path, _) = create::author(&id, &title, &notes_dir, contents)?;
+                            open_action(lua, path, None)
+                        }
+                        NoteType::Note => {
+                            let parent = db.get_frontmatter(
+                                parent_id.as_deref().ok_or(MyError::OtherError)?,
+                            )?;
+                            let parent_is_note = parent.note_type == "note";
+                            let (path, new_id) =
+                                create::note(parent, &id, &title, &notes_dir, contents)?;
+                            let replace = parent_is_note.then(|| format!("[[{new_id}|{title}]]"));
 
-                        Ok(ReturnValue(vec![(
-                            "open".to_string(),
-                            Table(vec![
-                                ("path".to_string(), path.into_lua(lua)?),
-                                ("row".to_string(), 11.into_lua(lua)?),
-                            ])
-                            .into_lua(lua)?,
-                        )]))
-                    }
-                    _ => Err(MyError::OtherError),
-                })
+                            open_action(lua, path, replace)
+                        }
+                        NoteType::Journal => {
+                            let (path, _) = create::journal(&notes_dir, contents)?;
+                            open_action(lua, path, None)
+                        }
+                        NoteType::None => Err(MyError::OtherError),
+                    },
+                )
             },
         )?,
     )?;
@@ -391,54 +329,33 @@ fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
     exports.set(
         "get_highlights",
         lua.create_function(|lua, content: Vec<String>| {
-            let x =
+            let parsed =
                 parse::parse_note(parse::LinesIter::List(content.into_iter())).into_lua_err()?;
 
-            let mut res: Vec<LuaValue> = vec![];
+            let mut highlights: Vec<LuaValue> = Vec::new();
 
-            let y = [x.links.clone(), x.author.clone(), x.source_parents.clone()].concat();
-
-            let frontmatter_refs: Vec<(usize, usize, usize)> = y
-                .into_iter()
-                .filter_map(|x| {
-                    if let note::RefLoc::FrontMatter(x, y, z) = x.loc {
-                        Some((x, y, z))
-                    } else {
-                        None
-                    }
-                })
-                .collect();
-
-            for (line, start_col, end_col) in frontmatter_refs {
-                res.push(
-                    Table(vec![
-                        ("hl".to_string(), "@markup.link.label".into_lua(lua)?),
-                        ("line".to_string(), line.into_lua(lua)?),
-                        ("start_col".to_string(), start_col.into_lua(lua)?),
-                        ("end_col".to_string(), end_col.into_lua(lua)?),
-                    ])
-                    .into_lua(lua)?,
-                )
+            for reference in parsed
+                .links
+                .iter()
+                .chain(&parsed.author)
+                .chain(&parsed.source_parents)
+            {
+                if let note::RefLoc::FrontMatter(line, start_col, end_col) = reference.loc {
+                    highlights.push(highlight(
+                        lua,
+                        "@markup.link.label",
+                        (line, start_col, end_col),
+                    )?);
+                }
             }
 
-            let j: Vec<(usize, usize, usize)> =
-                x.tags.into_iter().map(|t| t.loc.get_loc()).collect();
-
-            for (line, start_col, end_col) in j {
-                res.push(
-                    Table(vec![
-                        ("hl".to_string(), "ObsidianTag".into_lua(lua)?),
-                        ("line".to_string(), line.into_lua(lua)?),
-                        ("start_col".to_string(), start_col.into_lua(lua)?),
-                        ("end_col".to_string(), end_col.into_lua(lua)?),
-                    ])
-                    .into_lua(lua)?,
-                )
+            for tag in &parsed.tags {
+                highlights.push(highlight(lua, "ObsidianTag", tag.loc.get_loc())?);
             }
 
             Ok(ReturnValue(vec![(
                 "highlight".to_string(),
-                res.into_lua(lua)?,
+                highlights.into_lua(lua)?,
             )]))
         })?,
     )?;
@@ -446,7 +363,7 @@ fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
         "cursor_action",
         lua.create_function(
             |lua,
-             (notes_dir, db_file, content, col, row): (
+             (notes_dir, db_file, content, line, col): (
                 String,
                 String,
                 Vec<String>,
@@ -454,13 +371,10 @@ fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
                 usize,
             )| {
                 lua_db(lua, &db_file, &notes_dir, |db| {
-                    let start = Instant::now();
-                    let x = parse::parse_note(parse::LinesIter::List(content.into_iter()))?;
-                    let x = x.get_ref(col, row);
+                    let parsed = parse::parse_note(parse::LinesIter::List(content.into_iter()))?;
 
-                    print!("Time Taken: {}s", start.elapsed().as_secs_f64());
-                    match x {
-                        Some(r) => match r.to {
+                    match parsed.get_ref(line, col) {
+                        Some(reference) => match reference.to {
                             RefNode::NoteAnchor(anchor) => {
                                 let (path, row, col) = db.get_loc(anchor)?;
                                 Ok(ReturnValue(vec![(
@@ -502,26 +416,14 @@ fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
     Ok(exports)
 }
 
-pub fn lua_db<F, T: IntoLua>(
-    lua: &Lua,
-    db_path: &String,
-    notes_dir: &String,
-    f: F,
-) -> LuaResult<LuaValue>
+pub fn lua_db<F, T: IntoLua>(lua: &Lua, db_path: &str, notes_dir: &str, f: F) -> LuaResult<LuaValue>
 where
     F: FnOnce(db::Db) -> Result<T>,
 {
-    db::Db::init(Path::new(&notes_dir), Path::new(&db_path))
+    db::Db::init(Path::new(notes_dir), Path::new(db_path))
         .and_then(f)
         .into_lua_err()
         .and_then(|x| x.into_lua(lua))
-}
-
-pub fn bin_do<F, T: Debug>(db_path: String, notes_dir: String, f: F) -> Result<T>
-where
-    F: FnOnce(db::Db) -> Result<T>,
-{
-    db::Db::init(Path::new(&notes_dir), Path::new(&db_path)).and_then(f)
 }
 
 impl IntoLua for db::DbValue {
@@ -553,40 +455,14 @@ impl IntoLua for db::DbValue {
     }
 }
 
-// May use for picker simplicity
-#[derive(Debug, Clone)]
-pub struct Notes {
-    v: Vec<Note>,
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[derive(Debug, Clone)]
-pub struct Note {
-    id: DbValue,
-    title: DbValue,
-    authors: DbValue,
-    tags: DbValue,
-    links: DbValue,
-}
-
-impl IntoLua for Notes {
-    fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
-        let t = lua.create_table()?;
-        for x in self.v.into_iter() {
-            t.set(x.id.clone(), x)?
-        }
-        Ok(LuaValue::Table(t))
-    }
-}
-
-impl IntoLua for Note {
-    fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
-        let t = lua.create_table()?;
-        t.set("id", self.id)?;
-        t.set("title", self.title)?;
-        t.set("tags", self.tags)?;
-        t.set("authors", self.authors)?;
-        t.set("links", self.links)?;
-        Ok(LuaValue::Table(t))
-
+    #[test]
+    fn note_id_drops_lowercase_words() {
+        assert_eq!("Foo Bar".to_string().to_note_id(), "foo-bar");
+        assert_eq!("foo Bar".to_string().to_note_id(), "bar");
+        assert_eq!("ALL CAPS".to_string().to_note_id(), "all-caps");
     }
 }

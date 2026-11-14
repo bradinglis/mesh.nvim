@@ -1,5 +1,50 @@
 local M = {}
 
+local Source = {}
+Source.__index = Source
+
+function Source:get_trigger_characters()
+  return { "#" }
+end
+
+function Source:enabled()
+  return vim.bo.filetype == "markdown"
+end
+
+function Source:get_completions(ctx, callback)
+  return self._get_completions(ctx, callback)
+end
+
+function Source:execute(_, _, callback, default_implementation)
+  default_implementation()
+  callback()
+end
+
+--- Wrap a `get_completions` function in the module shape blink.cmp expects.
+---@param get_completions fun(ctx: table, callback: fun(response: table)): (fun()|nil)
+---@return { new: fun(): table }
+function M.module(get_completions)
+  local source = setmetatable({ _get_completions = get_completions }, Source)
+  return {
+    new = function()
+      return source
+    end,
+  }
+end
+
+--- Finish a completion request with the standard mesh flags.
+---@param callback fun(response: table)
+---@param items lsp.CompletionItem[]
+---@return fun()
+function M.respond(callback, items)
+  callback({
+    items = items,
+    is_incomplete_backward = true,
+    is_incomplete_forward = true,
+  })
+  return function() end
+end
+
 M.providers = {
   { name = "md_tags", module = "mesh-nvim.completion.tags" },
   { name = "md_links", module = "mesh-nvim.completion.links" },
@@ -15,8 +60,7 @@ local function add_provider(blink, provider_name, provider_module)
     async = true,
     opts = {},
     enabled = function()
-      -- Enable only in markdown buffers.
-      return vim.tbl_contains({ "markdown" }, vim.bo.filetype)
+      return vim.bo.filetype == "markdown"
         and vim.bo.buftype ~= "prompt"
         and vim.b.completion ~= false
     end,
@@ -25,142 +69,72 @@ end
 
 function M.register_providers()
   local blink = require "blink.cmp"
-
-  for _, provider in pairs(M.providers) do
+  for _, provider in ipairs(M.providers) do
     add_provider(blink, provider.name, provider.module)
   end
 end
 
-local function add_element_to_list_if_not_exists(list, element)
-  if not vim.tbl_contains(list, element) then
-    table.insert(list, 1, element)
+local function add_providers(list)
+  for _, provider in ipairs(M.providers) do
+    if not vim.tbl_contains(list, provider.name) then
+      table.insert(list, 1, provider.name)
+    end
   end
 end
 
-
-local function log_unexpected_type(config_path, unexpected_type, expected_type)
+local function log_unexpected_type(path, actual, expected)
   vim.notify(
-    "blink.cmp's `"
-      .. config_path
-      .. "` configuration appears to be an '"
-      .. unexpected_type
-      .. "' type, but it "
-      .. "should be '"
-      .. expected_type
-      .. "'. Obsidian won't update this configuration, and "
-      .. "completion won't work with blink.cmp",
+    ("blink.cmp's `%s` should be %s, but is '%s'. mesh.nvim will not modify it."):format(
+      path,
+      expected,
+      actual
+    ),
     vim.log.levels.ERROR
   )
 end
 
----Attempts to inject the Obsidian sources into per_filetype if that's what the user seems to use for markdown
----@param blink_sources_per_filetype table<string, (fun():string[])|(string[])>
----@return boolean true if it obsidian sources were injected into the sources.per_filetype
-local function try_inject_blink_sources_into_per_filetype(blink_sources_per_filetype)
-  -- If the per_filetype is an empty object, then it's probably not utilized by the user
-  if vim.deep_equal(blink_sources_per_filetype, {}) then
+--- Inject mesh providers into a blink source list, preserving user entries.
+---@param container table
+---@param key string
+---@return boolean whether the value was handled
+local function inject_into(container, key)
+  local value = container[key]
+  local value_type = type(value)
+
+  if value == nil then
     return false
-  end
-
-  local markdown_config = blink_sources_per_filetype["markdown"]
-
-  -- If the markdown key is not used, then per_filetype it's probably not utilized by the user
-  if markdown_config == nil then
-    return false
-  end
-
-  local markdown_config_type = type(markdown_config)
-  if markdown_config_type == "table" and vim.islist(markdown_config) then
-    for _, provider in pairs(M.providers) do
-      add_element_to_list_if_not_exists(markdown_config, provider.name)
+  elseif value_type == "function" then
+    container[key] = function()
+      local result = value()
+      add_providers(result)
+      return result
     end
     return true
-  elseif markdown_config_type == "function" then
-    local original_func = markdown_config
-    markdown_config = function()
-      local original_results = original_func()
-
-      for _, provider in pairs(M.providers) do
-        add_element_to_list_if_not_exists(original_results, provider.name)
-      end
-      return original_results
-    end
-
-    -- Overwrite the original config function with the newly generated one
-    require("blink.cmp.config").sources.per_filetype["markdown"] = markdown_config
+  elseif value_type == "table" and vim.islist(value) then
+    add_providers(value)
     return true
-  else
-    log_unexpected_type(
-      ".sources.per_filetype['markdown']",
-      markdown_config_type,
-      "a list or a function that returns a list of sources"
-    )
-    return true -- logged the error, returns as if this was successful to avoid further errors
   end
+
+  log_unexpected_type(("sources.%s"):format(key), value_type, "a list or a function")
+  return true
 end
 
----Attempts to inject the Obsidian sources into default if that's what the user seems to use for markdown
----@param blink_sources_default (fun():string[])|(string[])
----@return boolean true if it obsidian sources were injected into the sources.default
-local function try_inject_blink_sources_into_default(blink_sources_default)
-  local blink_default_type = type(blink_sources_default)
-  if blink_default_type == "function" then
-    local original_func = blink_sources_default
-    blink_sources_default = function()
-      local original_results = original_func()
-
-      for _, provider in pairs(M.providers) do
-        add_element_to_list_if_not_exists(original_results, provider.name)
-      end
-      return original_results
-    end
-
-    -- Overwrite the original config function with the newly generated one
-    require("blink.cmp.config").sources.default = blink_sources_default
-    return true
-  elseif blink_default_type == "table" and vim.islist(blink_sources_default) then
-    for _, provider in pairs(M.providers) do
-      add_element_to_list_if_not_exists(blink_sources_default, provider.name)
-    end
-
-    return true
-  elseif blink_default_type == "table" then
-    log_unexpected_type(".sources.default", blink_default_type, "a list")
-    return true -- logged the error, returns as if this was successful to avoid further errors
-  else
-    log_unexpected_type(".sources.default", blink_default_type, "a list or a function that returns a list")
-    return true -- logged the error, returns as if this was successful to avoid further errors
-  end
-end
-
--- Triggered for each opened markdown buffer that's in a workspace. nvm_cmp had the capability to configure the sources
--- per buffer, but blink.cmp doesn't have that capability. Instead, we have to inject the sources into the global
--- configuration and set a boolean on the module to return early the next time this function is called.
---
--- In-case the user used functions to configure their sources, the completion will properly work just for the markdown
--- files that are in a workspace. Otherwise, the completion will work for all markdown files.
+-- blink.cmp only exposes global source configuration, so inject once and let
+-- the provider's own `enabled` callback gate markdown buffers.
 function M.inject_sources()
   if M.injected_once then
     return
   end
-
   M.injected_once = true
 
   local blink_config = require "blink.cmp.config"
-  -- 'per_filetype' sources has priority over 'default' sources.
-  -- 'per_filetype' can be a table or a function which returns a table (["filetype"] = { "a", "b" })
-  -- 'per_filetype' has the default value of {} (even if it's not configured by the user)
-  local blink_sources_per_filetype = blink_config.sources.per_filetype
-  if try_inject_blink_sources_into_per_filetype(blink_sources_per_filetype) then
-    return
+  if not vim.deep_equal(blink_config.sources.per_filetype, {}) then
+    if inject_into(blink_config.sources.per_filetype, "markdown") then
+      return
+    end
   end
 
-  -- 'default' can be a list/array or a function which returns a list/array ({ "a", "b"})
-  local blink_sources_default = blink_config.sources["default"]
-  if try_inject_blink_sources_into_default(blink_sources_default) then
-    return
-  end
+  inject_into(blink_config.sources, "default")
 end
-
 
 return M

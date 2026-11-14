@@ -1,8 +1,7 @@
 use std::str::SplitWhitespace;
 
-use crate::MyError;
 use crate::Result;
-use crate::fold_rest::{FoldRest, IterState};
+use crate::fold_rest::{IterState, for_each_rest};
 use crate::note::{Ref, RefLoc, RefNode};
 use crate::parse::Lines;
 
@@ -20,143 +19,81 @@ pub(crate) struct FrontMatter {
 
 impl FrontMatter {
     pub fn parse(mut iter: Lines) -> Result<(Option<FrontMatter>, Lines)> {
-        if let Some(Ok(l)) = iter.peek() && l == "---" {
+        if let Some(Ok(line)) = iter.peek()
+            && line == "---"
+        {
             let _ = iter.next();
-            let mut new = Self::new();
-            let rest = iter.for_each_rest(|x| {
-                let line = x?;
-                new.lines += 1;
+            let mut frontmatter = Self::new();
+            let rest = for_each_rest(iter, |line| {
+                let line = line?;
+                frontmatter.lines += 1;
                 match line.as_str() {
                     "---" => Ok(IterState::Break),
                     _ => {
-                        let _ = new.add_line_to_frontmatter(line, new.lines);
+                        frontmatter.add_line_to_frontmatter(&line);
                         Ok(IterState::Continue)
                     }
                 }
             })?;
-            Ok((Some(new), rest))
+            Ok((Some(frontmatter), rest))
         } else {
             Ok((None, iter))
         }
-        // lnum += 1;
-        //
-        // let id = new
-        //     .id
-        //     .ok_or(MyError::ParseError("id not correct".to_string()))?;
-        // let note_type = new.note_type.unwrap_or("".to_string());
-        //
-        // Ok(InterimNote {
-        //     id,
-        //     aliases: new.aliases,
-        //     note_type: NoteType::from_string(note_type)?,
-        //     tags: new.tags,
-        //     references: new.references,
-        //     source_parents: new.source_parents,
-        //     author: new.author,
-        //     rest: Some(rest),
-        //     frontmatter_lines: lnum,
-        // })
     }
 
-    fn add_line_to_frontmatter(&mut self, line: String, lnum: usize) -> Result<()> {
-        let _: () = match line.split_once(": ") {
-            Some(("id", suff)) => self.id = Some(suff.to_string()),
-            Some(("aliases", suff)) => self.aliases = Some(suff.trim_matches('"').to_string()),
-            Some(("type", suff)) => self.note_type = Some(suff.to_string()),
-            Some(("source-parents", suff)) => self.add_source_parents(suff, lnum),
-            Some(("author", suff)) => self.add_authors(suff, lnum),
-            Some(("references", suff)) => self.add_references(suff, lnum),
-            Some(("tags", suff)) => self.add_tags(suff, lnum),
-            Some((x, y)) => Err(MyError::ParseError(format!("Unknown field: {x}: {y}")))?,
-            None => Err(MyError::ParseError("Unknown field".to_string()))?,
+    // Unknown or malformed frontmatter fields are ignored, matching the
+    // parser's tolerant handling of notes from other tools.
+    fn add_line_to_frontmatter(&mut self, line: &str) {
+        let Some((key, value)) = line.split_once(": ") else {
+            return;
         };
-        Ok(())
-    }
+        let line_num = self.lines;
+        let start = key.len() + 2;
 
-    fn add_source_parents(&mut self, text: &str, line: usize) {
-        let mut pos: usize = 16;
-        if let Some(parents) = Self::get_text_list(text).map(|iter| {
-            iter.map(|parent| {
-                let start = pos;
-                let end = pos + parent.len();
-                pos = end + 1;
-                Ref::new(
-                    Some(RefNode::NoteAnchor(self.id.clone().unwrap_or("".to_string()))),
-                    RefNode::NoteAnchor(parent.to_string()),
-                    RefLoc::FrontMatter(line, start, end),
-                    None,
-                )
-            })
-            .collect()
-        }) {
-            self.source_parents = parents
+        match key {
+            "id" => self.id = Some(value.to_string()),
+            "aliases" => self.aliases = Some(value.trim_matches('"').to_string()),
+            "type" => self.note_type = Some(value.to_string()),
+            "source-parents" => {
+                self.source_parents = self.parse_ref_list(value, line_num, start, false)
+            }
+            "author" => self.author = self.parse_ref_list(value, line_num, start, false),
+            "references" => self.references = self.parse_ref_list(value, line_num, start, false),
+            "tags" => self.tags = self.parse_ref_list(value, line_num, start, true),
+            _ => {}
         }
     }
 
-    fn add_authors(&mut self, text: &str, line: usize) {
-        let mut pos: usize = 8;
-        if let Some(authors) = Self::get_text_list(text).map(|iter| {
-            iter.map(|author| {
-                let start = pos;
-                let end = pos + author.len();
-                pos = end + 1;
-                Ref::new(
-                    Some(RefNode::NoteAnchor(self.id.clone().unwrap_or("".to_string()))),
-                    RefNode::NoteAnchor(author.to_string()),
-                    RefLoc::FrontMatter(line, start, end),
-                    None,
-                )
-            })
-            .collect()
-        }) {
-            self.author = authors
-        }
-    }
+    fn parse_ref_list(&self, text: &str, line: usize, start: usize, tag: bool) -> Vec<Ref> {
+        let Some(items) = Self::get_text_list(text) else {
+            return Vec::new();
+        };
 
-    fn add_tags(&mut self, text: &str, line: usize) {
-        let mut pos: usize = 6;
-        if let Some(tags) = Self::get_text_list(text).map(|iter| {
-            iter.map(|tag| {
-                let start = pos;
-                let end = pos + tag.len();
-                pos = end + 1;
-                Ref::new(
-                    Some(RefNode::NoteAnchor(self.id.clone().unwrap_or("".to_string()))),
-                    RefNode::Tag(tag.to_string()),
-                    RefLoc::FrontMatter(line, start, end),
+        let mut pos = start;
+        items
+            .map(|item| {
+                let end = pos + item.len();
+                let to = if tag {
+                    RefNode::Tag(item.to_string())
+                } else {
+                    RefNode::NoteAnchor(item.to_string())
+                };
+                let reference = Ref::new(
+                    Some(RefNode::NoteAnchor(self.id.clone().unwrap_or_default())),
+                    to,
+                    RefLoc::FrontMatter(line, pos, end),
                     None,
-                )
+                );
+                pos = end + 1;
+                reference
             })
             .collect()
-        }) {
-            self.tags = tags
-        }
-    }
-
-    fn add_references(&mut self, text: &str, line: usize) {
-        let mut pos: usize = 12;
-        if let Some(references) = Self::get_text_list(text).map(|iter| {
-            iter.map(|reference| {
-                let start = pos;
-                let end = pos + reference.len();
-                pos = end + 1;
-                Ref::new(
-                    Some(RefNode::NoteAnchor(self.id.clone().unwrap_or("".to_string()))),
-                    RefNode::NoteAnchor(reference.to_string()),
-                    RefLoc::FrontMatter(line, start, end),
-                    None,
-                )
-            })
-            .collect()
-        }) {
-            self.references = references
-        }
     }
 
     fn get_text_list(text: &str) -> Option<SplitWhitespace<'_>> {
         match text {
             "[]" => None,
-            y => Some(y.split_whitespace()),
+            value => Some(value.split_whitespace()),
         }
     }
 

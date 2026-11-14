@@ -1,5 +1,7 @@
 use std::cmp::Ordering;
 
+use super::Page;
+
 use pdf_oxide::layout::TextChar;
 
 /// OCR text layers place each word in its own tight box, so a quad's vertical
@@ -24,7 +26,7 @@ impl Rect {
     fn from_quad(quad: &[f64; 8]) -> Self {
         let mut xs = [f32::INFINITY, f32::NEG_INFINITY];
         let mut ys = [f32::INFINITY, f32::NEG_INFINITY];
-        for pair in quad.chunks_exact(2) {
+        for pair in quad.as_chunks::<2>().0 {
             let (x, y) = (pair[0] as f32, pair[1] as f32);
             xs[0] = xs[0].min(x);
             xs[1] = xs[1].max(x);
@@ -54,11 +56,13 @@ impl Rect {
     }
 }
 
-
 impl Page {
-    pub fn get_highlight(&self, annot: pdf_oxide::Annotation) -> Result<Option<String>, pdf_oxide::Error> {
+    pub fn get_highlight(
+        &self,
+        annot: &pdf_oxide::Annotation,
+    ) -> Result<Option<String>, pdf_oxide::Error> {
         if annot.subtype_enum != pdf_oxide::AnnotationSubtype::Highlight {
-            return Ok(None)
+            return Ok(None);
         }
 
         let mut lines = Vec::new();
@@ -74,7 +78,12 @@ impl Page {
                 }
             }
         }
-        Ok(Some(lines_to_markdown(&lines, &self.body_font)))
+        let text = lines_to_markdown(&lines, &self.body_font);
+        if text.trim().is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(text))
+        }
     }
 }
 
@@ -144,10 +153,7 @@ fn chars_in_rect(chars: &[TextChar], rect: Rect) -> Vec<TextChar> {
         }
     }
 
-    let mut line: Vec<TextChar> = selected[start..]
-        .iter()
-        .map(|(_, c)| c.clone())
-        .collect();
+    let mut line: Vec<TextChar> = selected[start..].iter().map(|(_, c)| c.clone()).collect();
 
     // Highlight quads often stop at the *origin* of the final glyph rather
     // than its advance, which leaves an adjacent punctuation mark (e.g. a
@@ -155,10 +161,11 @@ fn chars_in_rect(chars: &[TextChar], rect: Rect) -> Vec<TextChar> {
     // trailing punctuation glyph that is flush against the crop edge.
     if let Some(last) = line.last() {
         let right = last.bbox.x + last.bbox.width;
-        if let Some(next) = candidates.iter().find(|c| c.bbox.x >= right - 0.01) {
-            if next.bbox.x - right < 1.0 && is_punctuation(next.char) {
-                line.push((*next).clone());
-            }
+        if let Some(next) = candidates.iter().find(|c| c.bbox.x >= right - 0.01)
+            && next.bbox.x - right < 1.0
+            && is_punctuation(next.char)
+        {
+            line.push((*next).clone());
         }
     }
 
@@ -288,12 +295,27 @@ fn decode_entities(text: String) -> String {
         ("&lt;", "<"),
         ("&gt;", ">"),
         ("‘", "'"),
-        ("’", "'")
+        ("’", "'"),
     ]
     .into_iter()
     .fold(text, |text, (entity, replacement)| {
         text.replace(entity, replacement)
     })
+}
+
+#[cfg(test)]
+pub fn get_annotations(path: &std::path::Path) -> Result<Vec<String>, pdf_oxide::Error> {
+    let doc = pdf_oxide::PdfDocument::open(path)?;
+    let mut res = Vec::new();
+    for page_num in doc.page_indices() {
+        let page = super::Page::init(&doc, page_num)?;
+        for annot in doc.get_annotations(page_num)? {
+            if let Some(text) = page.get_highlight(&annot)? {
+                res.push(text);
+            }
+        }
+    }
+    Ok(res)
 }
 
 #[cfg(test)]
@@ -325,9 +347,9 @@ mod tests {
     // fonts, so the source article's emphasis is recoverable.
     #[test]
     fn test_three() -> Result<(), pdf_oxide::Error> {
-        get_annotations(std::path::Path::new("./tests/test_3.pdf")).map(|x| 
+        get_annotations(std::path::Path::new("./tests/test_3.pdf")).map(|x|
             assert_eq!(
-                x, 
+                x,
                 vec![
                     "The German idea of utility was not at all *subjective* because of the socially accepted superior position of *Polizei* over *Oekonomie.*",
                     "the Linnaean description of \"use-values\" does not have this feature and therefore cannot be identified as the basis of modern economics: instead, this kind of description, because of its *scientific* and *intersubjective* character, can be easily identified as the basis of the modern concept of *technology.*",
@@ -345,9 +367,9 @@ mod tests {
     // extraction rather than the visually corrected article text.
     #[test]
     fn test_four() -> Result<(), pdf_oxide::Error> {
-        get_annotations(std::path::Path::new("./tests/test_4.pdf")).map(|x| 
+        get_annotations(std::path::Path::new("./tests/test_4.pdf")).map(|x|
             assert_eq!(
-                x, 
+                x,
                 vec![
                     "the commodity has been graspea in such a way that it posits itself as money in the process of an \"immanent going beyond itself.",
                     "For these interpretations it is consequently the \"secret\" of the magnitude of value, not the \"secret\" of this \"objective semblance\" or of the thing-like form which constitutes the \"mystical character\" of the commodity.",

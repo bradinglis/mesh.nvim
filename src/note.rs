@@ -2,9 +2,7 @@ use std::fmt::Display;
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use serde::{Deserialize, Serialize};
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub(crate) struct Note {
     pub(crate) id: Option<String>,
     pub(crate) title: Option<String>,
@@ -22,7 +20,7 @@ pub(crate) struct Note {
     pub(crate) modified: Option<SystemTime>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub(crate) struct ContentLine {
     pub(crate) note_id: Option<String>,
     pub(crate) text: String,
@@ -39,7 +37,7 @@ impl ContentLine {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NoteType {
     Source,
     Author,
@@ -49,8 +47,8 @@ pub(crate) enum NoteType {
 }
 
 impl NoteType {
-    pub fn from_string(s: String) -> Self {
-        match s.as_str() {
+    pub fn from_string(s: &str) -> Self {
+        match s {
             "author" => Self::Author,
             "source" => Self::Source,
             "note" => Self::Note,
@@ -58,31 +56,35 @@ impl NoteType {
             _ => Self::None,
         }
     }
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Source => "source",
+            Self::Author => "author",
+            Self::Note => "note",
+            Self::Journal => "journal",
+            Self::None => "none",
+        }
+    }
 }
 
 impl Display for NoteType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let x = match self {
-            NoteType::Source => "source".to_string(),
-            NoteType::Author => "author".to_string(),
-            NoteType::Note => "note".to_string(),
-            NoteType::Journal => "journal".to_string(),
-            NoteType::None => "none".to_string(),
-        };
-
-        f.write_fmt(format_args!("{}", x))
+        f.write_str(self.as_str())
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub(crate) struct Ref {
     pub(crate) from: Option<RefNode>,
     pub(crate) to: RefNode,
     pub(crate) loc: RefLoc,
+    // Kept for UI callers that want to show `[[id|alias]]` titles.
+    #[allow(dead_code)]
     pub(crate) alias: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub struct Anchor {
     pub(crate) note_id: Option<String>,
     pub(crate) title: String,
@@ -109,14 +111,14 @@ impl Anchor {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug)]
 pub(crate) enum RefNode {
     NoteAnchor(String),
     Tag(String),
     Local(usize),
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug)]
 pub enum RefLoc {
     FrontMatter(usize, usize, usize),
     Body(usize, usize, usize),
@@ -146,26 +148,31 @@ impl Ref {
     }
 
     pub fn key(&self) -> usize {
-        if let Some(RefNode::Local(x)) = self.from {
-            x
-        } else {
-            999
+        match self.from {
+            Some(RefNode::Local(x)) => x,
+            _ => 999,
         }
     }
 }
 
 impl Note {
-    pub fn get_ref(&self, col: usize, row: usize) -> Option<Ref> {
-        let mut refs = self.tags.clone();
-        refs.append(&mut self.links.clone());
-        refs.append(&mut self.source_parents.clone());
-        refs.append(&mut self.author.clone());
-
-        refs.into_iter().find(|r| {
-            let (x, y, z) = r.loc.clone().get_loc();
-            (x == col) && (y <= row) && (z >= row)
-        })
+    /// Find the reference under a cursor position.
+    ///
+    /// `line` and `col` are zero-based, matching the values returned by
+    /// `nvim_win_get_cursor`.
+    pub fn get_ref(&self, line: usize, col: usize) -> Option<Ref> {
+        self.tags
+            .iter()
+            .chain(&self.links)
+            .chain(&self.source_parents)
+            .chain(&self.author)
+            .find(|r| {
+                let (ref_line, start_col, end_col) = r.loc.get_loc();
+                ref_line == line && start_col <= col && col <= end_col
+            })
+            .cloned()
     }
+
     pub fn add_file_data(mut self, path: PathBuf, hash: u64, modified: SystemTime) -> Self {
         self.path = Some(path);
         self.hash = Some(hash);
@@ -175,10 +182,13 @@ impl Note {
 }
 
 impl RefLoc {
-    pub fn get_loc(self) -> (usize, usize, usize) {
+    pub const fn get_loc(self) -> (usize, usize, usize) {
         match self {
-            RefLoc::FrontMatter(x, y, z) => (x, y, z),
-            RefLoc::Body(x, y, z) => (x, y, z),
+            Self::FrontMatter(x, y, z) | Self::Body(x, y, z) => (x, y, z),
         }
+    }
+
+    pub const fn is_frontmatter(self) -> bool {
+        matches!(self, Self::FrontMatter(..))
     }
 }

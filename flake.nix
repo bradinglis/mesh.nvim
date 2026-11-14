@@ -68,21 +68,11 @@
               pkgs.duckdb.lib
             ];
             strictDeps = false;
-            cargoVendorDir = craneLib.vendorMultipleCargoDeps {
-              inherit (craneLib.findCargoFiles src) cargoConfigs;
-              cargoLockList = [
-                ./Cargo.lock
-
-                # Unfortunately this approach requires IFD (import-from-derivation)
-                # otherwise Nix will refuse to read the Cargo.lock from our toolchain
-                # (unless we build with `--impure`).
-                #
-                # Another way around this is to manually copy the rustlib `Cargo.lock`
-                # to the repo and import it with `./path/to/rustlib/Cargo.lock` which
-                # will avoid IFD entirely but will require manually keeping the file
-                # up to date!
-                "${rustToolchain.passthru.availableComponents.rust-src}/lib/rustlib/src/rust/library/Cargo.lock"
-              ];
+            # The crate's PDF fixtures are not part of the packaged source, so
+            # run the test suite with `cargo test` rather than during `nix build`.
+            doCheck = false;
+            cargoVendorDir = craneLib.vendorCargoDeps {
+              src = ./.;
             };
 
           };

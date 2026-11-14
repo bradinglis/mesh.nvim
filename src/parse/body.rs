@@ -1,6 +1,6 @@
 use crate::parse::{Lines, frontmatter::FrontMatter};
 
-use crate::{Result, NoteId};
+use crate::{NoteId, Result};
 use regex::Regex;
 use std::sync::LazyLock;
 
@@ -34,74 +34,85 @@ impl BodyParsing {
         })
     }
 
-    pub(crate) fn consume(
-        mut self,
-    ) -> Note {
+    pub(crate) fn consume(mut self) -> Note {
         let mut links = self.links;
-        self.ref_list.sort_by_key(|x| x.key());
+        self.ref_list.sort_by_key(Ref::key);
 
-        self.refs.into_iter().for_each(|x| {
-            let x = x.instantiate_intext(&self.ref_list);
-            links.push(x);
-        });
+        for reference in self.refs {
+            links.push(reference.instantiate_intext(&self.ref_list));
+        }
 
         match self.frontmatter {
-            Some(f) => {
+            Some(mut frontmatter) => {
                 let mut tags = self.tags;
-                tags.append(&mut f.tags.clone());
-                links.append(&mut f.references.clone());
+                tags.append(&mut frontmatter.tags);
+                links.append(&mut frontmatter.references);
 
                 Note {
                     id: self.id,
-                    title: f.aliases,
-                    note_type: f.note_type.map_or(NoteType::None, NoteType::from_string),
+                    title: frontmatter.aliases,
+                    note_type: frontmatter
+                        .note_type
+                        .as_deref()
+                        .map_or(NoteType::None, NoteType::from_string),
                     tags,
                     links,
                     contents: self.contents,
-                    source_parents: f.source_parents,
-                    author: f.author,
+                    source_parents: frontmatter.source_parents,
+                    author: frontmatter.author,
                     lines: self.line_num,
                     headings: self.headings,
-                    frontmatter_lines: f.lines,
+                    frontmatter_lines: frontmatter.lines,
                     path: None,
                     hash: None,
                     modified: None,
                 }
-            },
-            None => {
-                Note {
-                    id: self.id,
-                    title: None,
-                    note_type: NoteType::None,
-                    tags: self.tags,
-                    links,
-                    contents: self.contents,
-                    source_parents: vec![],
-                    author: vec![],
-                    lines: self.line_num,
-                    headings: self.headings,
-                    frontmatter_lines: 0,
-                    path: None,
-                    hash: None,
-                    modified: None,
-                }
+            }
+            None => Note {
+                id: self.id,
+                title: None,
+                note_type: NoteType::None,
+                tags: self.tags,
+                links,
+                contents: self.contents,
+                source_parents: vec![],
+                author: vec![],
+                lines: self.line_num,
+                headings: self.headings,
+                frontmatter_lines: 0,
+                path: None,
+                hash: None,
+                modified: None,
             },
         }
     }
 
     pub(crate) fn parse_lines(mut self, rest: Lines) -> Self {
-        rest.for_each(|x| self.parse_line(x));
+        rest.for_each(|line| self.parse_line(line));
         self
     }
 
     fn parse_line(&mut self, text: Result<String>) {
-        let text = text.unwrap_or("".to_string());
+        let text = text.unwrap_or_default();
         self.line_num += 1;
-        self.get_tags(&text);
-        self.get_links(&text);
-        self.get_reference_intext(&text);
-        self.get_reference_list(&text);
-        self.get_headings(&text);
+
+        // Cheap character guards keep the regexes off the common path.
+        if text.contains('#') {
+            self.get_tags(&text);
+            if text.starts_with('#') {
+                self.get_headings(&text);
+            }
+        }
+        if text.contains("[[") {
+            self.get_links(&text);
+        }
+        if text.contains("][") {
+            self.get_reference_intext(&text);
+        }
+        if text.starts_with('[') {
+            self.get_reference_list(&text);
+        }
+
         self.contents
             .push(ContentLine::new(text, self.line_num, self.id.clone()));
     }
@@ -109,14 +120,14 @@ impl BodyParsing {
     fn get_tags(&mut self, line: &str) {
         static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\s#([a-zA-Z\-]+)").unwrap());
 
-        for (r, (_, [tag])) in RE
-            .captures_iter(line)
-            .map(|c| (c.get_match().range(), c.extract()))
-        {
+        for (range, tag) in RE.captures_iter(line).filter_map(|c| {
+            let tag = c.get(1)?.as_str().to_string();
+            Some((c.get(0)?.range(), tag))
+        }) {
             self.tags.push(Ref::new(
                 self.id.clone().map(RefNode::NoteAnchor),
-                RefNode::Tag(tag.to_string()),
-                RefLoc::Body(self.line_num, r.start + 1, r.end),
+                RefNode::Tag(tag),
+                RefLoc::Body(self.line_num, range.start + 1, range.end),
                 None,
             ));
         }
@@ -125,71 +136,54 @@ impl BodyParsing {
     fn get_headings(&mut self, line: &str) {
         static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^(#+) (.+)$").unwrap());
 
-        for (r, (_, [prefix, heading])) in RE
+        for (range, prefix, heading) in RE
             .captures_iter(line)
-            .map(|c| (c.get_match().range(), c.extract()))
+            .filter_map(|c| Some((c.get(0)?.range(), c.get(1)?.as_str(), c.get(2)?.as_str())))
         {
-            let mut heading_link = String::new();
-
             let level = prefix.len();
-            // Possibly do heading level stuff here.. and subheading handling??
-            match level {
-                1 => {
-                    if let Some(x) = self.id.clone() {
-                        heading_link.push_str(x.as_str());
-                    } else {
-                        heading_link.push_str(&NoteId::derive(heading).to_owned());
-                    }
-                },
-                2 => {
-                    if let Some(x) = self.parent_anchor(1).map(|x| x.heading_link) {
-                        heading_link = x;
-                        heading_link.push('_');
-                    } else {
-                        heading_link.push('#');
-                    }
-                    heading_link.push_str(&&NoteId::derive_subheading(heading).to_owned());
-                },
-                x => {
-                    if let Some(x) = self.parent_anchor(x - 1).map(|x| x.heading_link) {
-                        heading_link = x;
-                        heading_link.push('_');
-                    } else {
-                        heading_link.push('#');
-                    }
-                    heading_link.push_str(&NoteId::derive_subheading(heading).to_owned());
-                }
-            }
+            let heading_link = if level == 1 {
+                self.id
+                    .clone()
+                    .unwrap_or_else(|| NoteId::derive(heading).to_string())
+            } else {
+                let mut link = match self.parent_heading(level - 1) {
+                    Some(parent) => format!("{parent}_"),
+                    None => "#".to_string(),
+                };
+                link.push_str(&NoteId::derive_subheading(heading).to_string());
+                link
+            };
 
             self.headings.push(Anchor::new(
                 self.id.to_owned(),
                 heading.to_string(),
                 heading_link,
-                RefLoc::Body(self.line_num, r.start, r.end),
+                RefLoc::Body(self.line_num, range.start, range.end),
                 level,
             ));
         }
     }
 
-    fn parent_anchor(&self, level: usize) -> Option<Anchor> {
+    fn parent_heading(&self, level: usize) -> Option<&str> {
         self.headings
-            .clone()
-            .into_iter()
-            .rfind(|x| x.level == level)
+            .iter()
+            .rev()
+            .find(|anchor| anchor.level == level)
+            .map(|anchor| anchor.heading_link.as_str())
     }
 
     fn get_links(&mut self, line: &str) {
         static RE: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(r"\[\[([^\|\]]+)\|?([^\|\]]*)\]\]").unwrap());
 
-        for (r, (_, [to_id, title])) in RE
+        for (range, to_id, title) in RE
             .captures_iter(line)
-            .map(|c| (c.get_match().range(), c.extract()))
+            .filter_map(|c| Some((c.get(0)?.range(), c.get(1)?.as_str(), c.get(2)?.as_str())))
         {
             self.links.push(Ref::new(
                 self.id.clone().map(RefNode::NoteAnchor),
                 RefNode::NoteAnchor(to_id.to_owned()),
-                RefLoc::Body(self.line_num, r.start, r.end),
+                RefLoc::Body(self.line_num, range.start, range.end),
                 Some(title.to_string()),
             ));
         }
@@ -199,14 +193,14 @@ impl BodyParsing {
         static RE: LazyLock<Regex> =
             LazyLock::new(|| Regex::new(r"\[([^\]]+)\]\[([0-9]+)\]").unwrap());
 
-        for (r, (_, [name, ref_num])) in RE
+        for (range, name, ref_num) in RE
             .captures_iter(line)
-            .map(|c| (c.get_match().range(), c.extract()))
+            .filter_map(|c| Some((c.get(0)?.range(), c.get(1)?.as_str(), c.get(2)?.as_str())))
         {
             self.refs.push(Ref::new(
                 self.id.clone().map(RefNode::NoteAnchor),
                 RefNode::Local(ref_num.parse().unwrap_or(0)),
-                RefLoc::Body(self.line_num, r.start, r.end),
+                RefLoc::Body(self.line_num, range.start, range.end),
                 Some(name.to_string()),
             ));
         }
@@ -215,14 +209,14 @@ impl BodyParsing {
     fn get_reference_list(&mut self, line: &str) {
         static RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^\[([0-9]+)\]: (.+)").unwrap());
 
-        for (r, (_, [ref_num, to_id])) in RE
+        for (range, ref_num, to_id) in RE
             .captures_iter(line)
-            .map(|c| (c.get_match().range(), c.extract()))
+            .filter_map(|c| Some((c.get(0)?.range(), c.get(1)?.as_str(), c.get(2)?.as_str())))
         {
             self.ref_list.push(Ref::new(
                 ref_num.parse().ok().map(RefNode::Local),
                 RefNode::NoteAnchor(to_id.to_owned()),
-                RefLoc::Body(self.line_num, r.start, r.end),
+                RefLoc::Body(self.line_num, range.start, range.end),
                 None,
             ));
         }

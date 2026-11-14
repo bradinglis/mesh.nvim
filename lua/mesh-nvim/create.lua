@@ -4,75 +4,74 @@ local config = require "mesh-nvim.config"
 
 local M = {}
 
-local function create(opts)
+---@return string
+local function current_note_id()
+  return vim.split(vim.fs.basename(vim.api.nvim_buf_get_name(0)), "%.")[1]
+end
 
-  local content = nil
-  if opts.viz then
-    content = vim.split(opts.viz.selection, "\n", { plain = true })
+---@return table?
+local function visual_selection()
+  if vim.endswith(vim.fn.mode():lower(), "v") then
+    return util.get_visual_selection()
   end
+end
 
-  vim.ui.input({ prompt = string.format("Enter %s id: ", opts.type) }, function(longName)
-    if not longName or longName == "" then
+---@param opts { type: string, parent?: string, viz?: table }
+local function create(opts)
+  local content = opts.viz and vim.split(opts.viz.selection, "\n", { plain = true }) or nil
+
+  vim.ui.input({ prompt = ("Enter %s id: "):format(opts.type) }, function(long_name)
+    if not long_name or long_name == "" then
       vim.notify("Aborted")
       return
     end
 
-    local id = util.try(function()
-      return bin.id_gen(longName)
+    local suggested_id = util.try(function()
+      return bin.id_gen(long_name)
     end)
 
-    vim.ui.input({ prompt = string.format("Enter %s id: ", opts.type), default = id }, function(input)
-      if not id or id == "" then
-        vim.notify("Aborted")
-        return
-      end
-      require("mesh-nvim.rfun").try(function()
-        return bin.create_new(config.current_vault.dir, config.current_vault.db, opts.type, longName, input, opts.parent, content)
-      end, true, opts.viz)
-      util.try(function()
-          return bin.update_index(config.current_vault.dir, config.current_vault.db)
-        end,
-        function(v)
-          vim.notify(v, vim.log.levels.INFO)
+    vim.ui.input(
+      { prompt = ("Enter %s id: "):format(opts.type), default = suggested_id },
+      function(input)
+        if not input or input == "" then
+          vim.notify("Aborted")
+          return
         end
-      )
-    end)
-  end)
 
+        require("mesh-nvim.rfun").try(function()
+          return bin.create_new(
+            config.current_vault.dir,
+            config.current_vault.db,
+            opts.type,
+            long_name,
+            input,
+            opts.parent,
+            content
+          )
+        end, true, opts.viz)
+
+        util.try(function()
+          return bin.update_index(config.current_vault.dir, config.current_vault.db)
+        end)
+      end
+    )
+  end)
 end
 
 function M.source()
-  local current_buf = vim.api.nvim_get_current_buf()
-  local parent_id = vim.split(vim.fs.basename(vim.api.nvim_buf_get_name(current_buf)), "%.")[1]
-
-  local viz
-  if vim.endswith(vim.fn.mode():lower(), "v") then
-    viz = util.get_visual_selection()
-  end
-
-  create({ type = "source", parent = parent_id, viz = viz })
+  create({ type = "source", parent = current_note_id(), viz = visual_selection() })
 end
 
 function M.author()
-  -- local current_buf = vim.api.nvim_get_current_buf()
   create({ type = "author" })
 end
 
 function M.journal()
-  -- local current_buf = vim.api.nvim_get_current_buf()
   create({ type = "journal" })
 end
 
 function M.note()
-  local current_buf = vim.api.nvim_get_current_buf()
-  local parent_id = vim.split(vim.fs.basename(vim.api.nvim_buf_get_name(current_buf)), "%.")[1]
-
-  local viz
-  if vim.endswith(vim.fn.mode():lower(), "v") then
-    viz = util.get_visual_selection()
-  end
-
-  create({ type = "note", parent = parent_id, viz = viz })
+  create({ type = "note", parent = current_note_id(), viz = visual_selection() })
 end
 
 return M
