@@ -1,306 +1,221 @@
-# Semantic note search plan
+# Semantic note search plan (v2)
 
-## Goal
+Status: plan only, no implementation yet. Read `docs/refactor-review.md` first; several of its blocking items are prerequisites here.
 
-Add a semantic relevance search endpoint to mesh.nvim. It should accept either a free-text prompt or an existing note, embed the query locally, compare it against indexed note/anchor embeddings, and open a snacks.nvim picker with ranked notes, anchors, snippets, and source locations.
+## Goals
 
-This is a planning document only. No implementation has been started yet.
+1. A Lua endpoint that takes a **string** (optionally with a **context note**) and returns a picker of relevant notes and anchors with their locations.
+2. A second endpoint that takes the **current note** (or a given note id) as the query.
+3. Ranking is **hybrid**: semantic similarity + keyword match, boosted by graph signals (tags, links, references, authors, parents).
+4. Embeddings are generated **locally in Rust** and stored in the vault's DuckDB file.
+5. Results open at the right file and line, using the same picker/open conventions as the existing pickers.
 
-## User-facing API
+## Decisions (from review with the user)
 
-Two Lua entry points are planned:
+| Topic | Decision |
+| --- | --- |
+| Inference backend | **Spike both** candle (pure Rust) and ONNX before committing (Phase 0) |
+| Model weights | Download at runtime into `stdpath("data")/mesh/models`; not built into Nix |
+| Query execution | Synchronous Lua call; model **warmed in a background thread** at startup |
+| Default scope | All types **except authors**; `filters.type` overrides |
+| Vault size target | Medium (current vault is smaller, see below) |
+| Result granularity | Notes and anchors |
 
-```lua
--- Free-text prompt, with optional note context for disambiguation.
-M.semantic_search(prompt, {
-  context_note = "Alpha",   -- optional note id/title
-  limit = 20,
-  include_notes = true,
-  include_anchors = true,
-  filters = { type = "note", tags = { "topic" } },
-})
+## Measured baseline (`~/zettel`, `~/.local/share/nvf/mesh/zettel.duckdb`)
 
--- Use the current or named note as the query.
-M.semantic_search_note(note_id, {
-  limit = 20,
-  include_notes = true,
-  include_anchors = true,
-})
+| Metric | Value |
+| --- | --- |
+| Notes | 691 (487 source, 73 note, 131 author) |
+| Anchors (headings) | 1,452; every note has at least one |
+| Body text | ~2.9 M chars in 23.8 k lines; avg 4.3 k chars/note, max 49 k |
+| Tags | 1,724 uses, 668 distinct (sparse) |
+| Refs | 1,065 in-text links, 493 author, 305 parent, 245 frontmatter references |
+
+Consequences:
+
+- Expect roughly 2.5-3.5 k chunks. Brute-force `list_cosine_similarity` over that is milliseconds. **No HNSW / VSS extension is needed** (also avoids a network `INSTALL`). Verified: `list_cosine_similarity` is available in core DuckDB 1.5.
+- Notes can far exceed a 512-token model window, so one vector per note is not enough: chunk by section with windows.
+- Tags are near-unique, so tag overlap must be IDF-weighted or it will almost never fire. Links/author/parent edges are the stronger graph signal.
+
+## Architecture
+
+```
+Lua (init.lua / semantic.lua / pick.lua)
+  | mesh.semantic_search_prompt / _note / update_embeddings / warm_model / embedding_status
+Rust cdylib
+  embeddings.rs   Embedder trait, model loading (static, shared), chunk jobs
+  chunking.rs     sections -> windows -> ChunkJob (pure, unit-tested)
+  semantic.rs     candidate retrieval + scoring + result assembly (pure scoring fns)
+  db.rs           ensure_schema, embedding CRUD, candidate queries
+DuckDB            embeddings + embedding_state tables, existing notes/tags/refs/anchors/contents
 ```
 
-Rust/Lua boundary:
+### Types (stronger typing, per the earlier goal)
 
-- Rust computes embeddings and returns ranked results.
-- Lua builds and displays the snacks picker and opens the selected location.
-- The Rust endpoint should return a list of result records, not drive UI directly.
-
-Proposed result record:
-
-```lua
-{
-  note_id = "Alpha",
-  anchor_id = "alpha-introduction", -- nil for note-level results
-  title = "Alpha",
-  kind = "anchor",                 -- "note" or "anchor"
-  path = "/vault/notes/alpha.md",
-  line = 12,
-  start_col = 0,
-  end_col = 42,
-  score = 0.87,
-  semantic_score = 0.91,
-  keyword_score = 0.62,
-  graph_score = 0.40,
-  snippet = "See [[Beta]] and #topic.",
-  tags = { "topic" },
-}
+```rust
+trait Embedder: Send + Sync { fn dim(&self) -> usize; fn model_id(&self) -> &str;
+                              fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>; }
+enum ChunkScope { Note, Anchor }          // stored as 'note' / 'anchor'
+struct ChunkJob { note_id, anchor_id, part, scope, text, text_hash, line }
+struct SearchOpts { limit, filters: Filters, weights: Weights, include: Scope, graph_seeds: bool }
+struct Weights { semantic, keyword, graph }   // renormalised when a signal is absent
+struct Hit { note_id, anchor_id: Option<_>, scope, title, heading, path, line, start_col, end_col,
+             score, semantic, keyword, graph, snippet, tags }
+enum Query { Prompt { text, context_note: Option<String> }, Note(String) }
 ```
 
-The snacks picker should show score, kind, title, snippet/tags, and allow opening the selected note at the returned line.
+`Embedder` is a trait so unit tests use a deterministic fake (hashed bag-of-words) and **never load a model or touch the network**. Real-model tests are `#[ignore]`. This keeps `nix build` (which runs tests) offline-safe.
 
-## Example data
+## Storage
 
-Use the existing vault for development and manual testing:
-
-- Notes: `~/zettel`
-- Database: `~/.local/share/nvf/mesh/zettel.duckdb`
-
-This keeps the plan aligned with the user's current Neovim/NVF setup.
-
-## DuckDB schema changes
-
-Add an embeddings table alongside the existing notes/tags/refs/anchors tables:
+Created by an idempotent `Db::ensure_schema()` on every `Db::init` (the existing `clear.sql` path only runs on a vault change; see review item 1):
 
 ```sql
+CREATE TABLE IF NOT EXISTS embedding_state (
+  model TEXT NOT NULL, dim INTEGER NOT NULL, schema_version INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS embeddings (
-    note_id TEXT NOT NULL,
-    anchor_id TEXT,
-    chunk_kind TEXT NOT NULL,      -- 'note' or 'anchor'
-    text TEXT NOT NULL,
-    vector FLOAT[] NOT NULL,
-    content_hash UBIGINT NOT NULL,
-    model TEXT NOT NULL,
-    updated_at TIMESTAMP NOT NULL,
-    PRIMARY KEY (note_id, anchor_id)
+  note_id   TEXT NOT NULL,
+  scope     TEXT NOT NULL,              -- 'note' | 'anchor'
+  anchor_id TEXT NOT NULL DEFAULT '',   -- '' for note-level chunks
+  part      INTEGER NOT NULL DEFAULT 0, -- window index within the section
+  line      UINTEGER NULL,              -- absolute 1-based line where the chunk starts
+  text      TEXT NOT NULL,
+  text_hash UBIGINT NOT NULL,
+  vector    FLOAT[] NOT NULL,
+  PRIMARY KEY (note_id, scope, anchor_id, part)
 );
 ```
 
-Notes:
+- No foreign key (derived data). Orphans are removed with `DELETE ... WHERE note_id NOT IN (SELECT note_id FROM notes)` at the start of each embedding run.
+- A row is **stale** when its `text_hash` differs from the freshly built chunk, or `embedding_state.model/dim` differs from the loaded model. A model change clears the table.
+- `clear.sql` also drops both tables (vault change).
 
-- `anchor_id` is `NULL` for note-level embeddings.
-- `vector` length must match the configured model dimension.
-- A content hash avoids recomputing embeddings for unchanged notes.
-- An HNSW index may be added later through DuckDB's VSS extension if available. The first implementation can use brute-force cosine similarity via DuckDB list functions and optimize after profiling.
+## Chunking (built from the DB, not the parser)
 
-## Chunking strategy
+Building chunks from `notes`/`anchors`/`contents`/`tags`/`refs` means existing databases can be backfilled without re-parsing, and chunking is independent of the indexing pass.
 
-Use the existing parsed note structure:
+- **Note chunk** (one per note): `title`, type, tags, author titles (from `refs.kind='author'` joined to `notes`), then the start of the body up to the model limit. Author notes get **only** this chunk.
+- **Anchor chunks**: lines of `contents` from an anchor's `line` to the next anchor's `line`. Prefix each chunk with `Note title > heading`. Sections over ~1,500 chars (~350 tokens) are split into windows on paragraph boundaries with ~150 chars overlap; `part` indexes the window.
+- Note-level score for ranking = max over the note's chunks.
 
-- One `note` chunk per note:
-  - title/aliases
-  - note type
-  - tags
-  - source parents and authors
-  - a truncated or full body, depending on model context limits
-- One `anchor` chunk per heading:
-  - heading title
-  - body text until the next heading
-  - anchor id and location
+## Embedding pipeline (lock-friendly, resumable)
 
-This reuses `note::Note`, `note::Anchor`, and `ContentLine` data already produced by the parser.
+Embedding is minutes of CPU. It must not hold the DuckDB file lock (review item 2).
 
-## Local embedding model
+1. **Plan** (short read): build `ChunkJob`s, left-anti-join against `embeddings` to find missing/stale ones.
+2. **Embed** (no DB handle): batches of 32-64 via the shared static model.
+3. **Commit** (short write): one transaction per batch (delete old rows for those keys, insert new). Progress is durable, so an interrupted run resumes.
 
-The user requested local embedding generation in Rust. Proposed implementation:
+`mesh.update_embeddings(dir, db, opts)` returns counts and any per-batch errors (a good use of the existing `Results` type). It runs in its own worker thread (`vim.uv.new_thread`); `util.try` must **not** join that thread. Commits retry with short backoff on lock errors (behaviour to be confirmed in spike S3).
 
-- Add an optional Cargo feature, e.g. `semantic`, defaulting to enabled.
-- Use a Rust embedding crate such as `fastembed` with a small default model (`BAAI/bge-small-en-v1.5`, 384 dimensions).
-- Download/cache model files under `stdpath("data")/mesh/models`.
-- Expose a small internal module, e.g. `crate::embeddings`, with:
+Triggers: after a successful structural `update_index`, and explicitly via a command. It is never part of the synchronous `M.update()`.
 
-```rust
-pub fn embed_texts(texts: &[&str]) -> Result<Vec<Vec<f32>>>
-pub fn model_name() -> &'static str
-pub fn vector_dim() -> usize
+## Search
+
+`semantic_search_prompt(notes_dir, db_file, prompt, context_note?, opts)` and `semantic_search_note(notes_dir, db_file, note_id, opts)`.
+
+**Query vector**
+- Prompt: `embed(prompt)`. With a context note: `normalize(0.7 * embed(prompt) + 0.3 * note_vector)`, where `note_vector` is read from the DB (no re-embedding).
+- Note: the note's stored note-level vector. The note and its own anchors are excluded from results.
+
+**Stage 1 - candidates** (SQL)
+- Top 100 by `list_cosine_similarity(vector, ?)`.
+- Top 50 by keyword match: query terms (lowercased, stop-words removed) counted with `contains(lower(text), term)`. DuckDB's FTS extension is **not** used (needs a network `INSTALL`).
+- Union.
+
+**Stage 2 - scoring** (pure Rust functions, unit-tested)
+
+```
+score = w_sem * sem + w_kw * kw + w_graph * graph        (defaults 0.6 / 0.2 / 0.2)
+sem   = clamp(cosine, 0, 1)
+kw    = BM25-lite over query terms (idf from the chunk corpus), normalised by the candidate max
+graph = 1 - (1-link)(1-parent)(1-author)(1-tags)         (noisy-or, each term in [0,1])
 ```
 
-Open questions:
+Graph is measured against **seed notes**: the context note, or the note itself for note search, or (prompt only) the top 3 semantic hits (pseudo-relevance feedback; `graph_seeds=false` disables it). Explicit `#tags` in the prompt also seed the tag term.
 
-- Whether `fastembed`'s dependency/build weight is acceptable.
-- Whether model download should be lazy, explicit, or happen during `update_index`.
-- Whether to support multiple models or lock to one dimension for schema simplicity.
+| Signal | Source | Value |
+| --- | --- | --- |
+| direct link / reference either direction | `refs` kinds `intext_link`, `frontmatter_reference` (map `to_anchor` -> note through `anchors`) | 1.0 |
+| parent/child source | `refs` kind `parent` | 0.8 |
+| shared author | `refs` kind `author` | 0.6 |
+| shared tags | IDF-weighted Jaccard over `tags` | 0..1 |
 
-## Index lifecycle
+When a signal is unavailable (no seeds, no tags) its weight is **redistributed** pro rata so scores stay comparable.
 
-Embeddings should be maintained during normal indexing:
+**Assembly**
+- Keep the best chunk per anchor; aggregate a note row from its best chunk.
+- Default mixed list ordered by score; a note row is dropped if its best chunk is an anchor already listed. `opts.group = "anchor" | "note" | "mixed"`.
+- Filters: `type` (default excludes `author`), `tags` (any), `exclude_ids`.
+- Each `Hit` carries `path`, `line`, `start_col`, `end_col` (same conventions as `anchors`, so `buf.open` works unchanged), the three component scores, tags and a snippet.
 
-1. `Db::process_files()` returns added/modified/deleted notes.
-2. `Db::update_notes()` already has the parsed `note::Note` values and removed paths.
-3. After inserting notes/tags/refs/anchors/contents, compute embeddings for added/modified notes.
-4. Delete embeddings for removed note ids.
-5. Store content hashes and skip unchanged chunks.
-
-Because embedding generation can be slow, indexing should eventually move to a background thread or expose progress. The existing worker-thread path (`update_async`) is the natural place for this. The synchronous `M.update()` may need to become non-blocking for medium vaults.
-
-## Search and ranking
-
-The Rust search method should:
-
-1. Embed the prompt or source note.
-2. Optionally embed the context note and combine vectors (average is a reasonable first approach).
-3. Query candidate embeddings from DuckDB.
-4. Compute semantic similarity.
-5. Add keyword overlap score.
-6. Add graph score from tags, links, references, source parents, and authors.
-7. Return top `limit` results.
-
-Proposed hybrid score:
-
-```text
-score =
-  semantic_weight * cosine_similarity +
-  keyword_weight * normalized_keyword_overlap +
-  graph_weight * normalized_graph_overlap
-```
-
-Suggested initial weights:
-
-- semantic: 0.65
-- keyword: 0.20
-- graph: 0.15
-
-Graph weighting can use:
-
-- shared tags
-- direct links/references
-- shared source parents/authors
-- same note type
-- recency as a small tie-breaker
-
-Filters should support vault, note type, tags, and possibly date ranges.
-
-## Lua integration
-
-Add to `lua/mesh-nvim/`:
-
-- `semantic.lua` or functions in `init.lua`
-- `completion/` is not needed for search
-- snacks picker construction similar to `pick.lua`
-
-Lua responsibilities:
-
-- Read config and current vault.
-- Call Rust endpoints.
-- Convert results to picker items.
-- Open selected location using existing `buf.open`/`rfun.run("open", ...)`.
-- Show indexing/search progress with `vim.notify`.
-
-Config additions:
+## Lua API
 
 ```lua
-semantic = {
-  enabled = true,
-  model = "bge-small-en-v1.5",
-  limit = 20,
-  weights = {
-    semantic = 0.65,
-    keyword = 0.20,
-    graph = 0.15,
-  },
-  include_notes = true,
-  include_anchors = true,
-}
+local mesh = require("mesh-nvim")
+
+-- string query; prompts with vim.ui.input when prompt is nil
+mesh.semantic_search(prompt, {
+  context_note = "Alpha" | true,    -- note id, or true for the current buffer's note
+  limit = 20, group = "mixed",
+  filters = { type = { "source", "note" }, tags = { "topic" } },
+})
+
+-- query by a note; defaults to the current buffer's note
+mesh.semantic_search_note(note_id, { limit = 20 })
+
+mesh.update_embeddings()            -- background; progress via vim.notify
 ```
 
-## Rust API additions
+- New `lua/mesh-nvim/semantic.lua` wraps the calls with `util.try`, and `pick.from_semantic(hits, title)` builds the snacks picker (score, scope icon, title, heading, snippet; file preview at `line`; `confirm` -> `buf.open{path,row,col}`).
+- If the Rust build lacks the feature (`mesh.semantic_search_prompt == nil`), Lua notifies instead of erroring.
+- `warm_model()` is called once from `setup` in a worker thread. A search before the model is ready shows "model loading".
+- Config: `semantic = { enabled, limit, weights, model, group }` in `config.lua`.
 
-Planned `mesh` exports:
+## Build and packaging
 
-```rust
-semantic_search_prompt(
-  notes_dir,
-  db_file,
-  prompt,
-  context_note: Option<String>,
-  opts
-) -> Vec<SearchResult>
+- Cargo feature `semantic` (on by default; can be turned off to keep a lean build). Gate all model code behind it.
+- Model files are downloaded on first use (`hf-hub`) with a clear notification and an actionable offline error. Nothing is fetched at build time, so the Nix sandbox stays offline.
+- **Nix:** whichever backend wins must build offline in the sandbox. fastembed's *default* features (`ort-download-binaries`) do **not**; the plan uses `default-features = false` with either `bert-text` (candle) or `onnx` + ort `load-dynamic` with onnxruntime from nixpkgs.
+- Keep `nix build` running the tests; model-dependent tests are `#[ignore]`.
 
-semantic_search_note(
-  notes_dir,
-  db_file,
-  note_id,
-  opts
-) -> Vec<SearchResult>
-```
+## Phases
 
-`Db` additions:
+0. **Spikes** (decide before building)
+   - **S1 backend:** candle (`bert-text`) vs ONNX (`load-dynamic`), models `bge-small-en-v1.5` vs `all-MiniLM-L6-v2`. Measure: builds in `nix build`; build-time and `libmesh.so` size delta; full index time for ~3 k chunks; warm query latency; model load time; quality on ~10 hand-written queries over `~/zettel`. Gates: full index <= 10 min, warm query embed <= 150 ms, model load <= 3 s.
+   - **S2 threads:** confirm the model static is shared between the main Lua state and a `vim.uv` thread (same loaded `.so`), so warm-up helps the main thread.
+   - **S3 locking:** what happens when a second `Connection::open` targets the file while another connection is writing, in one process. Decide retry/backoff vs `ATTACH`.
+   - **S4 SQL:** time `list_cosine_similarity` over 3 k x 384 and the keyword query.
+   - **S5 download:** `hf-hub` progress reporting and offline failure message.
+1. **Prerequisites** (review items 1-5): `ensure_schema`, separate embedding thread + lock retry, `tests/smoke.lua`, nullable-list handling.
+2. **Storage + chunking** with the fake `Embedder`: schema, `ChunkJob` build, stale detection, orphan cleanup. Fully unit-tested, no model.
+3. **Model integration:** real `Embedder`, warm-up, `update_embeddings` (plan/embed/commit), progress.
+4. **Search:** candidate SQL, scoring functions, seeds, assembly, both Rust endpoints, `FromLua` for `SearchOpts`.
+5. **Lua:** `semantic.lua`, picker, config, commands/keymaps docs, extend `tests/smoke.lua`.
+6. **Hardening:** profile on `~/zettel`, tune weights against the query set, update `AGENTS.md` and the skill.
 
-```rust
-fn ensure_embedding_schema(&self) -> Result<()>
-fn update_embeddings(&self, notes: &[note::Note], removed: &[String]) -> Result<Vec<String>>
-fn search_embeddings(&self, query: &[f32], opts: SearchOpts) -> Result<Vec<SearchResult>>
-```
+## Testing
 
-`SearchOpts` should include limit, filters, include flags, and weights.
+- Pure unit tests: chunking (windows, overlap, author-only note chunk), stale detection, noisy-or graph score, weight redistribution, BM25-lite, result dedupe.
+- DB tests on a temp vault with the fake embedder: backfill an existing DB without `embeddings`, model-change invalidation, orphan cleanup, interrupted run resumes.
+- Golden query set in `docs/semantic-eval.md` (10 queries with expected notes in `~/zettel`) used for weight tuning; run manually, not in CI.
+- `tests/smoke.lua`: index temp vault -> `update_embeddings` (fake or tiny model) -> both searches -> open a hit and assert the cursor line.
+- Nix build keeps passing with no network access.
 
-## Implementation phases
+## Risks
 
-1. Schema and storage
-   - Add `embeddings` table to `sql/clear.sql`.
-   - Add Rust structs and DB methods.
-   - Verify DuckDB list/vector operations.
+| Risk | Mitigation |
+| --- | --- |
+| Backend adds large build/runtime weight or breaks the Nix sandbox | Phase 0 spike with hard gates; feature flag |
+| First index too slow on CPU | Resumable batches, background thread, smaller model, measured in S1 |
+| DuckDB lock contention during embedding | Phased pipeline with short commits, retry/backoff (S3) |
+| Weak keyword/graph signal on sparse tags | IDF-weighted tags, link/author/parent edges, weight redistribution |
+| Schema drift on existing databases | `ensure_schema` + `embedding_state` version/model row |
+| Quality unknown until tried | Golden query set, tunable weights, expose component scores in the picker |
 
-2. Local embeddings
-   - Add optional Cargo feature and embedding crate.
-   - Implement model download/cache.
-   - Add embedding text generation for notes and anchors.
+## Open questions
 
-3. Indexing integration
-   - Call embedding updates from `Db::update_notes`.
-   - Handle deletions and content-hash skips.
-   - Report progress/errors.
-
-4. Search backend
-   - Implement cosine similarity query.
-   - Add keyword and graph scoring.
-   - Add filters and result serialization.
-
-5. Lua and picker
-   - Add endpoints and config.
-   - Build snacks picker.
-   - Open selected note/anchor location.
-
-6. Performance and UX
-   - Profile medium vaults.
-   - Consider HNSW index and background indexing.
-   - Add caching and cancellation if needed.
-
-## Testing plan
-
-- Unit tests for chunk text generation.
-- Unit tests for hybrid score calculation.
-- Integration test against `~/zettel` and `~/.local/share/nvf/mesh/zettel.duckdb`.
-- Manual picker test for note and prompt search.
-- Performance test for medium vault indexing and query latency.
-
-## Risks and open questions
-
-- Local model dependency size and build time.
-- Model download behavior in offline environments.
-- DuckDB vector extension availability and portability.
-- Whether anchor-level chunks are too numerous for medium vaults.
-- Whether semantic search should update embeddings synchronously or in the background.
-- Whether graph weights should be user-configurable or fixed initially.
-- Whether to support multiple embedding models with different vector dimensions.
-
-## Recommended first implementation
-
-Start with:
-
-- one fixed local model (`bge-small-en-v1.5`, 384 dimensions)
-- note + anchor chunks
-- brute-force cosine similarity in DuckDB
-- hybrid scoring with fixed weights
-- synchronous indexing in the existing worker thread
-- snacks picker with open-at-location behavior
-
-This keeps the first version understandable while leaving clear extension points for HNSW, background indexing, and configurable models.
+- Which model/backend wins the spike (S1)?
+- Should `update_embeddings` run automatically after every `BufWritePost`, or only on an explicit command and at startup? (The pipeline is resumable and cheap when nothing changed, so automatic is viable.)
+- Should results also surface `contents` lines (finer than anchors)? The current plan stops at anchor windows.

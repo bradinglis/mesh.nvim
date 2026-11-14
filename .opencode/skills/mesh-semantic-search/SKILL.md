@@ -1,63 +1,56 @@
 ---
 name: Mesh Semantic Search
-description: Implement and maintain the planned semantic note search feature in mesh.nvim, including DuckDB embeddings, Rust endpoints, Lua picker integration, and validation.
+description: Implement and maintain the planned semantic note search feature in mesh.nvim, including DuckDB embeddings, local Rust embedding, hybrid scoring, Lua picker integration, and validation.
 ---
 
 # Mesh Semantic Search
 
-Use this skill when implementing or extending the semantic note search feature described in `docs/semantic-search-plan.md`.
+Use this skill when implementing or extending semantic note search.
 
 ## Read first
 
-- `docs/semantic-search-plan.md`
-- `AGENTS.md`
-- `src/lib.rs`, especially `lua_db`, `update_index`, and the Lua-facing endpoint pattern
-- `src/db.rs`, especially `Db::process_files`, `Db::update_notes`, and query helpers
-- `src/parse/body.rs` and `src/parse/mod.rs` for parsed note/anchor data
-- `lua/mesh-nvim/init.lua`, `lua/mesh-nvim/pick.lua`, and `lua/mesh-nvim/buf.lua`
+1. `docs/semantic-search-plan.md` - the v2 plan, decisions, phases, and spike gates.
+2. `docs/refactor-review.md` - blocking prerequisites found in the existing code.
+3. `AGENTS.md` - build, test, and architecture notes.
 
-## Planned scope
+Key code: `src/lib.rs` (`lua_db`, endpoint pattern), `src/db.rs` (`Db::init`, `update_notes`, query helpers, `DbValue`), `sql/clear.sql`, `lua/mesh-nvim/util.lua` (`try` joins `update_thread`), `lua/mesh-nvim/init.lua` (`update`, `update_async`), `lua/mesh-nvim/pick.lua`, `lua/mesh-nvim/buf.lua` (`open`).
 
-- Add an `embeddings` table to `sql/clear.sql`.
-- Add Rust types and `Db` methods for embedding storage and search.
-- Add local embedding generation behind an optional Cargo feature.
-- Add `semantic_search_prompt` and `semantic_search_note` Rust endpoints.
-- Add Lua endpoints and a snacks.nvim picker.
-- Keep hybrid ranking: semantic, keyword, and graph weights.
+## Work in phases
 
-## Build and test commands
+Follow the plan's phase order. Do **Phase 0 spikes** before adding a model dependency, and land the **Phase 1 prerequisites** before storing any embeddings. Do not skip ahead: the backend choice (candle vs ONNX) is intentionally undecided until S1 passes its gates.
+
+## Hard constraints
+
+- **Schema:** tables are only created by `Db::clear()` on a vault change. New tables go in an idempotent `Db::ensure_schema()` (`CREATE TABLE IF NOT EXISTS`) that runs on every `Db::init`, and `clear.sql` must also drop them.
+- **Locking:** every endpoint opens its own DuckDB connection and holds the file lock. Never hold it while embedding. Use plan -> embed (no DB handle) -> short commit per batch.
+- **Threads:** `util.try` joins `update_thread`. Embedding runs in its own thread that `util.try` does not join. Thread payloads to the main thread are strings only.
+- **Never block the UI:** do not add embedding to the synchronous `M.update()`.
+- **Offline builds:** nothing may be downloaded at build time (Nix sandbox). fastembed default features (`ort-download-binaries`) are not allowed; use `default-features = false`. Model weights download at runtime to `stdpath("data")/mesh/models`.
+- **Testability:** all logic depends on the `Embedder` trait. Tests use the deterministic fake embedder, never a real model or the network; real-model tests are `#[ignore]`. `nix build` runs the tests.
+- **Lua API shape:** keep `{run, opts}` action results. Do not return nullable list items (`DbValue::List` drops `None`, leaving holes).
+- **Locations:** results use the `anchors` conventions (1-based line, 0-based columns) so `buf.open` works unchanged.
+- **Scope default:** exclude `author` notes unless `filters.type` says otherwise.
+- Preserve `tests/*.pdf`; keep `tests/` tracked and in the flake fileset.
+
+## Commands
 
 ```bash
 nix develop --command bash -lc 'cargo check'
+nix develop --command bash -lc 'cargo clippy --lib --tests'
 nix develop --command bash -lc 'cargo test --lib'
-nix develop --command bash -lc 'cargo build --release'
-nix build
+nix develop --command bash -lc 'cargo build --release'   # required before manual Lua testing
+nix build                                                # also runs the tests
+nix develop --command nvim --headless -u NONE --cmd 'set runtimepath+=.' -c 'luafile tests/smoke.lua' -c qa
 ```
 
-Use `~/zettel` and `~/.local/share/nvf/mesh/zettel.duckdb` for manual integration testing.
+Manual data: vault `~/zettel`, database `~/.local/share/nvf/mesh/zettel.duckdb` (691 notes, 1,452 anchors, ~2.9 M chars). Copy the database before experimenting; never run schema experiments on the live file.
 
-## Implementation constraints
+## Scoring recap
 
-- Keep the Lua-facing API shape `{run, opts}` for action results.
-- Do not break existing note indexing or pickers.
-- Preserve untracked PDF fixtures in `tests/`.
-- Prefer incremental changes by phase from the plan.
-- Report PDF annotation errors instead of panicking.
-- Keep Nix builds working; Nix skips tests because fixtures are not packaged.
+`score = w_sem*sem + w_kw*kw + w_graph*graph` (0.6/0.2/0.2). Graph is a noisy-or of link (1.0), parent (0.8), author (0.6), and IDF-weighted shared tags, measured against seed notes (context note, the note itself, or top-3 semantic hits). Redistribute a missing signal's weight pro rata. Keep component scores in each result so weights can be tuned against the golden queries.
 
-## Data flow
+## Definition of done per phase
 
-1. `file::Paths::go` detects new, modified, and deleted notes.
-2. `Db::update_notes` inserts note data.
-3. Embedding generation creates note and anchor chunks.
-4. Search embeds the prompt or source note.
-5. DuckDB returns candidate embeddings.
-6. Rust applies hybrid scoring and filters.
-7. Lua displays results and opens selected locations.
-
-## Validation
-
-- Add unit tests for chunk generation and score calculation.
-- Run `cargo test --lib`.
-- Run a manual picker test against the zettel vault.
-- Profile indexing and query latency for medium vaults before enabling HNSW or background indexing.
+- Unit tests added for the new pure logic.
+- `cargo fmt --check`, `cargo clippy --lib --tests`, `cargo test --lib`, and `nix build` pass.
+- `AGENTS.md` and the plan's decision/open-question sections updated.

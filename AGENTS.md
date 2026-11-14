@@ -25,6 +25,7 @@ Neovim plugin for a Markdown note vault: Rust `cdylib` (`mesh`) indexes notes in
 - Notes: recursively scans the vault for `.md`, skipping `.git` and `templates`. Hashing uses `rapidhash`.
 - Vault config: `vaults` table plus a `default` key that may be a vault name (string) or a vault table. The shipped default (`vaults.default = "none"`) is a placeholder and must be overridden.
 - Skills: project-specific implementation guidance lives under `.opencode/skills/`, including `mesh-semantic-search` for the planned semantic search feature.
+- Planned work: semantic search is specified in `docs/semantic-search-plan.md` (v2); prerequisites and review findings for the existing code are in `docs/refactor-review.md`. Read both before touching the DB schema, threading, or pickers.
 - Stronger types: `NoteType`, `RefKind` (`intext_link`, `frontmatter_reference`, `author`, `parent`), and `Location` (`frontmatter`/`body`) replace stringly typed fields in the Rust core.
 
 ## Gotchas
@@ -39,3 +40,8 @@ Neovim plugin for a Markdown note vault: Rust `cdylib` (`mesh`) indexes notes in
 - `lua/mesh-nvim/binary.lua` prepends its release directory to `package.cpath` instead of replacing it.
 - `lua/mesh-nvim/util.lua` caches `get_paths()` results.
 - Completion provider boilerplate is shared through `lua/mesh-nvim/completion/init.lua`.
+- Schema is created only by `Db::clear()` (run when the stored vault path is missing or differs). Editing `sql/clear.sql` does not change existing databases; new tables need an idempotent `CREATE TABLE IF NOT EXISTS` step in `Db::init`.
+- Every endpoint opens its own DuckDB connection (file lock) via `Db::init`, and `util.try` joins `update_thread` first, so a long-running write blocks all pickers. `M.update()` is synchronous (setup and `BufWritePost`).
+- `DbValue::List` drops `None` items, leaving holes in the Lua table (`ipairs`/`#` stop early); avoid nullable list items in new endpoints.
+- `anchors.line` is the absolute 1-based heading line, columns are 0-based, and `anchor_id` is globally unique (a level-1 heading's anchor id equals the note id).
+- Lua has no automated tests; the Nix plugin check only requires each module. DuckDB core provides `list_cosine_similarity`; the `vss`/`fts` extensions are not installed and must not be relied on.
