@@ -2,6 +2,7 @@ pub mod annotations;
 pub mod chunking;
 pub mod create;
 pub mod db;
+pub mod embed_index;
 pub mod embed_store;
 pub mod embeddings;
 pub mod file;
@@ -174,6 +175,43 @@ fn open_action(lua: &Lua, path: String, replace: Option<String>) -> Result<Retur
         "open".to_string(),
         Table(fields).into_lua(lua)?,
     )]))
+}
+
+#[cfg(feature = "semantic")]
+fn embed_refresh(notes_dir: &str, db_file: &str) -> Result<String> {
+    let embedder = embeddings::OnnxEmbedder::load(Path::new(db_file))?;
+    let report =
+        embed_index::update_embeddings(&embedder, Path::new(notes_dir), Path::new(db_file))?;
+    Ok(format!(
+        "Embeddings: {} written, {} removed{}",
+        report.embedded,
+        report.removed,
+        if report.cleared {
+            " (model changed, index rebuilt)"
+        } else {
+            ""
+        }
+    ))
+}
+
+#[cfg(not(feature = "semantic"))]
+fn embed_refresh(_notes_dir: &str, _db_file: &str) -> Result<String> {
+    Err(MyError::String(
+        "built without the semantic feature".to_string(),
+    ))
+}
+
+#[cfg(feature = "semantic")]
+fn warm_model(db_file: &str) -> Result<String> {
+    embeddings::OnnxEmbedder::load(Path::new(db_file))?;
+    Ok("embedding model ready".to_string())
+}
+
+#[cfg(not(feature = "semantic"))]
+fn warm_model(_db_file: &str) -> Result<String> {
+    Err(MyError::String(
+        "built without the semantic feature".to_string(),
+    ))
 }
 
 #[mlua::lua_module]
@@ -413,6 +451,28 @@ fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
         "get_tag_notes",
         lua.create_function(|lua, (notes_dir, db_file, tag): (String, String, String)| {
             lua_db(lua, &db_file, &notes_dir, |db| db.get_tag_notes(tag))
+        })?,
+    )?;
+
+    exports.set(
+        "update_embeddings",
+        lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
+            let message = match embed_refresh(&notes_dir, &db_file) {
+                Ok(text) => ("log".to_string(), text.into_lua(lua)?),
+                Err(error) => ("err".to_string(), error.to_string().into_lua(lua)?),
+            };
+            Ok(ReturnValue(vec![message]))
+        })?,
+    )?;
+
+    exports.set(
+        "warm_model",
+        lua.create_function(|lua, db_file: String| {
+            let message = match warm_model(&db_file) {
+                Ok(text) => ("log".to_string(), text.into_lua(lua)?),
+                Err(error) => ("err".to_string(), error.to_string().into_lua(lua)?),
+            };
+            Ok(ReturnValue(vec![message]))
         })?,
     )?;
 

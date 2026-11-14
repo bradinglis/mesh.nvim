@@ -15,6 +15,16 @@ rapidhash = "4.4.1"
 regex = "1.12.3"
 thiserror = "2.0.18"
 
+# Semantic search. Exact pins: ort's API version and fastembed's model
+# handling move together. rustls avoids an OpenSSL dependency in the Nix
+# sandbox. ONNX Runtime itself is provided by the flake (load-dynamic).
+fastembed = { version = "=7.7.0", default-features = false, features = ["onnx", "hf-hub-rustls-tls"], optional = true }
+ort = { version = "=2.0.0-rc.15", default-features = false, features = ["load-dynamic", "std", "tls-rustls", "ndarray"], optional = true }
+
+[features]
+default = ["semantic"]
+semantic = ["dep:fastembed", "dep:ort"]
+
 [profile.release]
 codegen-units = 1
 lto = "fat"

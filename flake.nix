@@ -31,6 +31,16 @@
         rustToolchain
       ];
       version = manifest.version;
+      # ONNX Runtime is loaded at runtime (ort `load-dynamic`), so it is not a
+      # build input. The version comes from the nixpkgs revision pinned in
+      # flake.lock; ort needs ONNX Runtime API >= 17.
+      onnxruntime = pkgs.onnxruntime;
+      onnxLib =
+        if onnxRuntimeOk then
+          "${onnxruntime}/lib/libonnxruntime.so"
+        else
+          throw "onnxruntime ${onnxruntime.version} is older than the 1.17 required by ort";
+      onnxRuntimeOk = pkgs.lib.versionAtLeast onnxruntime.version "1.17";
       src = pkgs.lib.fileset.toSource {
         root = ./.;
         fileset = pkgs.lib.fileset.unions [
@@ -51,6 +61,7 @@
           pkgs.vimPlugins.snacks-nvim
         ];
         shellHook = /* bash */ ''
+          export ORT_DYLIB_PATH="${onnxLib}"
           echo ""
           echo -e "\e[1;38;5;208m | Rust environment\e[0m"
           cargo version
@@ -90,6 +101,12 @@
           postPatch = ''
             mkdir -p target/release
             cp -vf ${binary}/lib/libmesh.so target/release/libmesh.so
+            cat > lua/mesh-nvim/runtime.lua <<EOF
+            return {
+              onnxruntime = "${onnxLib}",
+              onnxruntime_version = "${onnxruntime.version}",
+            }
+            EOF
           '';
 
           nvimSkipModule = [

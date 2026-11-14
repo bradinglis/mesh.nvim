@@ -45,3 +45,10 @@ Neovim plugin for a Markdown note vault: Rust `cdylib` (`mesh`) indexes notes in
 - `DbValue::List` drops `None` items, leaving holes in the Lua table (`ipairs`/`#` stop early); avoid nullable list items in new endpoints.
 - `anchors.line` is the absolute 1-based heading line, columns are 0-based, and `anchor_id` is globally unique (a level-1 heading's anchor id equals the note id).
 - Lua has no automated tests; the Nix plugin check only requires each module. DuckDB core provides `list_cosine_similarity`; the `vss`/`fts` extensions are not installed and must not be relied on.
+
+## Semantic search runtime
+
+- ONNX Runtime is loaded dynamically (`ort` `load-dynamic`). The dev shell exports `ORT_DYLIB_PATH`; the Nix plugin writes `lua/mesh-nvim/runtime.lua` with the pinned path (nixpkgs `onnxruntime` 1.27.1 via `flake.lock`; ort needs API >= 17). Elsewhere, set `ORT_DYLIB_PATH` before loading the plugin.
+- Model weights (`BAAI/bge-small-en-v1.5`) download on first use to `<db dir>/models` (`stdpath("data")/mesh/models`). Nothing is fetched at build time.
+- Embedding refresh (`lua/mesh-nvim/embed.lua`) runs in its own thread, is never joined by `util.try`, and runs after saves (debounced). Warm-up runs at setup.
+- `tests/smoke.lua` downloads the model only when `MESH_SMOKE_MODEL=1`; `cargo test --lib` uses a fake embedder and needs no network.

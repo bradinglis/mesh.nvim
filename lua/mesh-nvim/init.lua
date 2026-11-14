@@ -6,6 +6,7 @@ local find = require "mesh-nvim.find"
 local pick = require "mesh-nvim.pick"
 local config = require "mesh-nvim.config"
 local comp = require "mesh-nvim.completion"
+local embed = require "mesh-nvim.embed"
 
 local M = {}
 
@@ -21,6 +22,7 @@ M.setup = function(opts)
 
   M.update()
   comp.register_providers()
+  embed.warm()
 
   local group = vim.api.nvim_create_augroup("mesh", { clear = true })
 
@@ -42,7 +44,10 @@ M.setup = function(opts)
   vim.api.nvim_create_autocmd("BufWritePost", {
     group = group,
     pattern = "*.md",
-    callback = M.update,
+    callback = function()
+      M.update()
+      embed.schedule()
+    end,
   })
 end
 
@@ -113,6 +118,7 @@ function M.annotations()
 end
 
 M.create = create
+M.refresh_embeddings = embed.refresh
 M.find = find
 M.buf = buf
 M.pick = pick

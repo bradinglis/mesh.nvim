@@ -74,6 +74,17 @@ check("highlights cover the link and tag", function()
   assert(#actions[1].opts >= 1, "expected at least one highlight")
 end)
 
+-- Real model: downloads bge-small on first run (~130 MB). Opt in with MESH_SMOKE_MODEL=1.
+if vim.env.MESH_SMOKE_MODEL == "1" then
+  check("embeddings are written, then nothing changes", function()
+    local first = bin.update_embeddings(notes, db)
+    assert(first[1] and first[1].run == "log", "refresh failed: " .. vim.inspect(first))
+    assert(first[1].opts:match("Embeddings: %d+ written"), first[1].opts)
+    local second = bin.update_embeddings(notes, db)
+    assert(second[1].opts:match("Embeddings: 0 written, 0 removed"), second[1].opts)
+  end)
+end
+
 vim.fn.delete(root, "rf")
 
 if failures > 0 then
