@@ -24,6 +24,7 @@ Neovim plugin for a Markdown note vault: Rust `cdylib` (`mesh`) indexes notes in
 - DB: one DuckDB file per vault at `stdpath("data")/mesh/<vault>.duckdb`; schema in `sql/clear.sql`; read queries in `sql/notes_details.sql`.
 - Notes: recursively scans the vault for `.md`, skipping `.git` and `templates`. Hashing uses `rapidhash`.
 - Vault config: `vaults` table plus a `default` key that may be a vault name (string) or a vault table. The shipped default (`vaults.default = "none"`) is a placeholder and must be overridden.
+- Skills: project-specific implementation guidance lives under `.opencode/skills/`, including `mesh-semantic-search` for the planned semantic search feature.
 - Stronger types: `NoteType`, `RefKind` (`intext_link`, `frontmatter_reference`, `author`, `parent`), and `Location` (`frontmatter`/`body`) replace stringly typed fields in the Rust core.
 
 ## Gotchas
