@@ -158,8 +158,8 @@ impl Ref {
 impl Note {
     /// Find the reference under a cursor position.
     ///
-    /// `line` and `col` are zero-based, matching the values returned by
-    /// `nvim_win_get_cursor`.
+    /// `line` is the 1-based row and `col` the 0-based byte column, matching
+    /// the values produced by Lua's `nvim_win_get_cursor` (row is 1-based).
     pub fn get_ref(&self, line: usize, col: usize) -> Option<Ref> {
         self.tags
             .iter()

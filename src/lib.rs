@@ -1,6 +1,9 @@
 pub mod annotations;
+pub mod chunking;
 pub mod create;
 pub mod db;
+pub mod embed_store;
+pub mod embeddings;
 pub mod file;
 pub mod fold_rest;
 pub mod note;
@@ -426,16 +429,21 @@ where
         .and_then(|x| x.into_lua(lua))
 }
 
+/// Drop `None` entries so Lua receives a dense sequence.
+fn compact_list(items: Vec<DbValue>) -> Vec<DbValue> {
+    items
+        .into_iter()
+        .filter(|item| !matches!(item, DbValue::None))
+        .collect()
+}
+
 impl IntoLua for db::DbValue {
     fn into_lua(self, lua: &Lua) -> LuaResult<LuaValue> {
         Ok(match self {
             DbValue::List(items) => {
                 let t = lua.create_table()?;
-                for (i, x) in items.into_iter().enumerate() {
-                    if let DbValue::None = x {
-                    } else {
-                        t.set(i + 1, x)?
-                    }
+                for (i, x) in compact_list(items).into_iter().enumerate() {
+                    t.set(i + 1, x)?
                 }
                 LuaValue::Table(t)
             }
@@ -464,5 +472,17 @@ mod tests {
         assert_eq!("Foo Bar".to_string().to_note_id(), "foo-bar");
         assert_eq!("foo Bar".to_string().to_note_id(), "bar");
         assert_eq!("ALL CAPS".to_string().to_note_id(), "all-caps");
+    }
+
+    #[test]
+    fn compact_list_removes_nulls_without_holes() {
+        let items = vec![
+            DbValue::String("a".to_string()),
+            DbValue::None,
+            DbValue::String("b".to_string()),
+        ];
+        let compacted = compact_list(items);
+        assert_eq!(compacted.len(), 2);
+        assert!(matches!(&compacted[1], DbValue::String(s) if s == "b"));
     }
 }

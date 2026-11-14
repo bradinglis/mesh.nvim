@@ -385,6 +385,7 @@ impl Db {
             db.clear()?;
         }
 
+        db.ensure_embedding_schema()?;
         Ok(db)
     }
 
