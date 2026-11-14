@@ -17,7 +17,7 @@ Key code: `src/lib.rs` (`lua_db`, endpoint pattern), `src/db.rs` (`Db::init`, `u
 
 ## Work in phases
 
-Follow the plan's phase order. Do **Phase 0 spikes** before adding a model dependency, and land the **Phase 1 prerequisites** before storing any embeddings. Do not skip ahead: the backend choice (candle vs ONNX) is intentionally undecided until S1 passes its gates.
+Follow the plan's phase order. Do **Phase 0 spikes** before adding a model dependency, and land the **Phase 1 prerequisites** before storing any embeddings. Do not skip ahead: the backend choice (candle vs ONNX) is made by the **user** from the S1 measurements; stop and report before Phase 3. Embeddings refresh automatically after each save (debounced, one thread). Results jump to the best-matching line via Stage 3 (on-the-fly line embedding, keyword fallback), not per-line storage.
 
 ## Hard constraints
 

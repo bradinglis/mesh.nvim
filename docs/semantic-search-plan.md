@@ -14,12 +14,13 @@ Status: plan only, no implementation yet. Read `docs/refactor-review.md` first; 
 
 | Topic | Decision |
 | --- | --- |
-| Inference backend | **Spike both** candle (pure Rust) and ONNX before committing (Phase 0) |
+| Inference backend | **Spike both** candle (pure Rust) and ONNX (Phase 0); the spike reports measurements and **the user chooses** (no automatic winner) |
+| Embedding refresh | **Automatic** after each successful save/index (background, resumable) plus an explicit command |
 | Model weights | Download at runtime into `stdpath("data")/mesh/models`; not built into Nix |
 | Query execution | Synchronous Lua call; model **warmed in a background thread** at startup |
 | Default scope | All types **except authors**; `filters.type` overrides |
 | Vault size target | Medium (current vault is smaller, see below) |
-| Result granularity | Notes and anchors |
+| Result granularity | Notes and anchors, with the jump target refined to the **best-matching line** inside the chunk (see Stage 3) |
 
 ## Measured baseline (`~/zettel`, `~/.local/share/nvf/mesh/zettel.duckdb`)
 
@@ -57,9 +58,9 @@ trait Embedder: Send + Sync { fn dim(&self) -> usize; fn model_id(&self) -> &str
                               fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>; }
 enum ChunkScope { Note, Anchor }          // stored as 'note' / 'anchor'
 struct ChunkJob { note_id, anchor_id, part, scope, text, text_hash, line }
-struct SearchOpts { limit, filters: Filters, weights: Weights, include: Scope, graph_seeds: bool }
+struct SearchOpts { limit, filters: Filters, weights: Weights, include: Scope, graph_seeds: bool, refine_line: bool }
 struct Weights { semantic, keyword, graph }   // renormalised when a signal is absent
-struct Hit { note_id, anchor_id: Option<_>, scope, title, heading, path, line, start_col, end_col,
+struct Hit { note_id, anchor_id: Option<_>, scope, title, heading, path, line, chunk_line, start_col, end_col,
              score, semantic, keyword, graph, snippet, tags }
 enum Query { Prompt { text, context_note: Option<String> }, Note(String) }
 ```
@@ -109,7 +110,7 @@ Embedding is minutes of CPU. It must not hold the DuckDB file lock (review item 
 
 `mesh.update_embeddings(dir, db, opts)` returns counts and any per-batch errors (a good use of the existing `Results` type). It runs in its own worker thread (`vim.uv.new_thread`); `util.try` must **not** join that thread. Commits retry with short backoff on lock errors (behaviour to be confirmed in spike S3).
 
-Triggers: after a successful structural `update_index`, and explicitly via a command. It is never part of the synchronous `M.update()`.
+Triggers: automatically after each successful structural `update_index` (so after every `BufWritePost` and at startup), and explicitly via a command. Because planning is a cheap anti-join, a save that changed nothing embeds nothing. Saves are debounced and at most one embedding thread runs; a save during a run just marks it dirty for one more pass. It is never part of the synchronous `M.update()`.
 
 ## Search
 
@@ -143,6 +144,13 @@ Graph is measured against **seed notes**: the context note, or the note itself f
 | shared tags | IDF-weighted Jaccard over `tags` | 0..1 |
 
 When a signal is unavailable (no seeds, no tags) its weight is **redistributed** pro rata so scores stay comparable.
+
+**Stage 3 - best-matching line** (top results only, no extra storage)
+For the top `limit` hits, split the chunk into lines/sentences and pick the jump target:
+1. Embed those lines on the fly with the warm model (small batch: ~10 hits x ~10 lines) and take the highest cosine to the query vector; if the model is unavailable or too slow, fall back to
+2. the line with the most query-term matches, else
+3. the chunk start.
+`Hit.line` is the chosen line (absolute 1-based, derived from the chunk's `line` + offset); `Hit.chunk_line` keeps the chunk start. Blank lines, headings-only lines and frontmatter lines are skipped. Budget: Stage 3 adds <= 100 ms warm (measured in S1); `opts.refine_line = false` disables it.
 
 **Assembly**
 - Keep the best chunk per anchor; aggregate a note row from its best chunk.
@@ -183,7 +191,7 @@ mesh.update_embeddings()            -- background; progress via vim.notify
 ## Phases
 
 0. **Spikes** (decide before building)
-   - **S1 backend:** candle (`bert-text`) vs ONNX (`load-dynamic`), models `bge-small-en-v1.5` vs `all-MiniLM-L6-v2`. Measure: builds in `nix build`; build-time and `libmesh.so` size delta; full index time for ~3 k chunks; warm query latency; model load time; quality on ~10 hand-written queries over `~/zettel`. Gates: full index <= 10 min, warm query embed <= 150 ms, model load <= 3 s.
+   - **S1 backend:** candle (`bert-text`) vs ONNX (`load-dynamic`), models `bge-small-en-v1.5` vs `all-MiniLM-L6-v2`. Measure: builds in `nix build`; build-time and `libmesh.so` size delta; full index time for ~3 k chunks; warm query latency; Stage 3 line-refinement latency (~100 short texts); model load time; quality on ~10 hand-written queries over `~/zettel`. Gates: full index <= 10 min, warm query embed <= 150 ms, Stage 3 <= 100 ms, model load <= 3 s. **Output is a measurements table; the user picks the backend/model.** Do not start Phase 3 until they do.
    - **S2 threads:** confirm the model static is shared between the main Lua state and a `vim.uv` thread (same loaded `.so`), so warm-up helps the main thread.
    - **S3 locking:** what happens when a second `Connection::open` targets the file while another connection is writing, in one process. Decide retry/backoff vs `ATTACH`.
    - **S4 SQL:** time `list_cosine_similarity` over 3 k x 384 and the keyword query.
@@ -216,6 +224,6 @@ mesh.update_embeddings()            -- background; progress via vim.notify
 
 ## Open questions
 
-- Which model/backend wins the spike (S1)?
-- Should `update_embeddings` run automatically after every `BufWritePost`, or only on an explicit command and at startup? (The pipeline is resumable and cheap when nothing changed, so automatic is viable.)
-- Should results also surface `contents` lines (finer than anchors)? The current plan stops at anchor windows.
+- Which model/backend to ship: decided by the user after the S1 measurements.
+
+Resolved: automatic refresh after each save (debounced, single thread); line-level targeting via Stage 3 rather than indexing every line.
