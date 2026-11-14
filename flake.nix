@@ -39,6 +39,7 @@
           ./sql
           ./lua
           ./src
+          ./tests
         ];
       };
     in
@@ -68,9 +69,6 @@
               pkgs.duckdb.lib
             ];
             strictDeps = false;
-            # The crate's PDF fixtures are not part of the packaged source, so
-            # run the test suite with `cargo test` rather than during `nix build`.
-            doCheck = false;
             cargoVendorDir = craneLib.vendorCargoDeps {
               src = ./.;
             };

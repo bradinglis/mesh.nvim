@@ -7,7 +7,7 @@ Neovim plugin for a Markdown note vault: Rust `cdylib` (`mesh`) indexes notes in
 - Toolchain is pinned to nightly Rust through the flake: `nix develop` (or rely on `.envrc` + direnv). The crate no longer uses unstable feature gates, but use the flake's pinned toolchain for reproducible builds.
 - DuckDB is linked dynamically (crate feature `bundled` is disabled). `libduckdb` must be available at build and runtime; the flake provides it.
 - Lua loads the library from `target/release/libmesh.so` (`util.get_paths().release_dir`). After Rust edits run `cargo build --release`, not a debug build.
-- Build plugin via Nix: `nix build` (copies `libmesh.so` into the vim plugin tree). Nix builds skip `cargo test` because the PDF fixtures are not part of the packaged source; run tests locally.
+- Build plugin via Nix: `nix build` (copies `libmesh.so` into the vim plugin tree). Nix builds run `cargo test --lib` too, so `tests/` must stay tracked in git (flakes ignore untracked files) and listed in the `src` fileset in `flake.nix`.
 - Quick compile check: `cargo check`.
 
 ## Testing
