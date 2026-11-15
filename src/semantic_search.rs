@@ -40,16 +40,46 @@ pub struct Weights {
 }
 
 impl Default for Weights {
+    /// Prompt search. Graph is off: sweeping it against the evaluation sets
+    /// lowered recall, because pseudo-seeds from semantic hits add noise.
     fn default() -> Self {
         Self {
             semantic: 0.6,
             keyword: 0.2,
-            graph: 0.2,
+            graph: 0.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct WeightOverrides {
+    pub semantic: Option<f32>,
+    pub keyword: Option<f32>,
+    pub graph: Option<f32>,
+}
+
+impl WeightOverrides {
+    /// Applies any provided overrides on top of the query type's defaults.
+    pub fn apply(self, base: Weights) -> Weights {
+        Weights {
+            semantic: self.semantic.unwrap_or(base.semantic),
+            keyword: self.keyword.unwrap_or(base.keyword),
+            graph: self.graph.unwrap_or(base.graph),
         }
     }
 }
 
 impl Weights {
+    /// Note search has no prompt text, so the keyword signal is off and links
+    /// carry the weight that semantic similarity does not.
+    pub const fn note_default() -> Self {
+        Self {
+            semantic: 0.6,
+            keyword: 0.0,
+            graph: 0.4,
+        }
+    }
+
     /// Drops signals that do not exist for this query and rescales the rest
     /// so they still sum to one.
     pub fn effective(self, has_keyword: bool, has_graph: bool) -> Self {
@@ -99,7 +129,7 @@ pub struct SearchOpts {
     pub exclude_ids: Vec<String>,
     pub graph_seeds: bool,
     pub refine_line: bool,
-    pub weights: Weights,
+    pub weights: WeightOverrides,
 }
 
 impl Default for SearchOpts {
@@ -112,7 +142,7 @@ impl Default for SearchOpts {
             exclude_ids: Vec::new(),
             graph_seeds: true,
             refine_line: true,
-            weights: Weights::default(),
+            weights: WeightOverrides::default(),
         }
     }
 }
@@ -302,7 +332,6 @@ struct NoteInfo {
 struct Row {
     key: ChunkKey,
     line: Option<usize>,
-    text: String,
     cos: f32,
     mask: u64,
 }
@@ -385,7 +414,7 @@ fn load_corpus(db: &Db, query: &[f32], terms: &[String]) -> Result<Corpus> {
         mask_terms.join(" + ")
     };
     let rows_sql = format!(
-        "select e.note_id, e.scope, e.anchor_id, e.part, e.line, e.text,
+        "select e.note_id, e.scope, e.anchor_id, e.part, e.line,
                 list_cosine_similarity(e.vector, cast(? as FLOAT[])) as cos,
                 {mask} as mask
          from embeddings e"
@@ -406,9 +435,8 @@ fn load_corpus(db: &Db, query: &[f32], terms: &[String]) -> Result<Corpus> {
                     part: row.get::<_, i32>(3)? as u32,
                 },
                 line: row.get::<_, Option<u32>>(4)?.map(|line| line as usize),
-                text: row.get(5)?,
-                cos: row.get::<_, Option<f32>>(6)?.unwrap_or(0.0),
-                mask: row.get::<_, i64>(7)? as u64,
+                cos: row.get::<_, Option<f32>>(5)?.unwrap_or(0.0),
+                mask: row.get::<_, i64>(6)? as u64,
             })
         })?
         .collect::<duckdb::Result<Vec<Row>>>()?
@@ -602,7 +630,11 @@ pub fn search(
 
     let has_keyword = !terms.is_empty();
     let has_graph = !seeds.is_empty() || !prompt_tags.is_empty();
-    let weights = opts.weights.effective(has_keyword, has_graph);
+    let base = match query {
+        Query::Prompt { .. } => Weights::default(),
+        Query::Note(_) => Weights::note_default(),
+    };
+    let weights = opts.weights.apply(base).effective(has_keyword, has_graph);
 
     let term_idf: Vec<f32> = corpus
         .term_df
@@ -774,7 +806,7 @@ fn build_hit(
 
     let chunk_line = row.line.unwrap_or(1);
     let mut line = chunk_line;
-    let mut snippet = snippet_of(&row.text);
+    let mut snippet = snippet_of(&chunk_text(db, &row.key)?);
     let start_col = 0;
     let mut end_col = 0;
 
@@ -812,6 +844,15 @@ fn build_hit(
         tags,
         snippet,
     })
+}
+
+fn chunk_text(db: &Db, key: &ChunkKey) -> Result<String> {
+    Ok(db.connection.query_row(
+        "select text from embeddings
+         where note_id = ? and scope = ? and anchor_id = ? and part = ?",
+        duckdb::params![key.note_id, key.scope.as_str(), key.anchor_id, key.part],
+        |row| row.get(0),
+    )?)
 }
 
 fn snippet_of(text: &str) -> String {

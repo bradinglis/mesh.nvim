@@ -54,3 +54,12 @@ Manual data: vault `~/zettel`, database `~/.local/share/nvf/mesh/zettel.duckdb` 
 - Unit tests added for the new pure logic.
 - `cargo fmt --check`, `cargo clippy --lib --tests`, `cargo test --lib`, and `nix build` pass.
 - `AGENTS.md` and the plan's decision/open-question sections updated.
+
+## Status
+
+- Phase 0 (spikes): done, branch `spike/semantic-backends`. ONNX chosen.
+- Phase 1-2 (storage, chunking, prerequisites): done.
+- Phase 3 (ONNX embedder, refresh, warm-up): done.
+- Phase 4 (search backend): done. Prompt default graph weight 0; note search defaults in `semantic_search.rs`.
+- Phase 5 (Lua commands, picker, config): done; snacks UI verified only through a stubbed picker in the smoke test.
+- Phase 6 (tuning): weights swept against two query sets; profile recorded. Open: linear search cost for a medium vault (cache or ANN), and note-search evaluation. See `docs/semantic-eval.md`.

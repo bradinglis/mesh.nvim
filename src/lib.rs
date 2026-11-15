@@ -256,6 +256,17 @@ fn parse_search_opts(table: Option<LuaTable>) -> LuaResult<semantic_search::Sear
             opts.tags = tags;
         }
     }
+    if let Some(weights) = table.get::<Option<LuaTable>>("weights")? {
+        if let Some(value) = weights.get::<Option<f32>>("semantic")? {
+            opts.weights.semantic = Some(value);
+        }
+        if let Some(value) = weights.get::<Option<f32>>("keyword")? {
+            opts.weights.keyword = Some(value);
+        }
+        if let Some(value) = weights.get::<Option<f32>>("graph")? {
+            opts.weights.graph = Some(value);
+        }
+    }
     Ok(opts)
 }
 

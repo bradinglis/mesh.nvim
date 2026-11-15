@@ -74,6 +74,33 @@ check("highlights cover the link and tag", function()
   assert(#actions[1].opts >= 1, "expected at least one highlight")
 end)
 
+check("semantic items carry locations and kinds", function()
+  local items = require("mesh-nvim.semantic").items({
+    { note_id = "Alpha", anchor_id = "Alpha", title = "Alpha", heading = "Alpha", path = "/v/alpha.md", line = 8, start_col = 0, score = 0.5, snippet = "text", tags = { "marx" } },
+    { note_id = "Beta", anchor_id = nil, title = "Beta", heading = "", path = "/v/beta.md", line = 1, start_col = 0, score = 0.2, snippet = "more", tags = {} },
+  })
+  assert(items[1].row == 8 and items[1].file == "/v/alpha.md" and items[1].kind == "section")
+  assert(items[1].heading == "Alpha" and items[1].text:find("marx"), "heading or tags missing")
+  assert(items[2].kind == "note" and items[2].heading == nil and items[2].row == 1)
+end)
+
+check("semantic picker opens the note at the hit line", function()
+  local captured
+  package.preload["snacks.picker"] = function()
+    return { pick = function(options) captured = options end }
+  end
+  package.loaded["mesh-nvim.pick"] = nil
+  local items = require("mesh-nvim.semantic").items({
+    { note_id = "Alpha", anchor_id = "Alpha", title = "Alpha", heading = "Alpha", path = notes .. "/alpha.md", line = 8, start_col = 0, score = 0.5, snippet = "x", tags = {} },
+  })
+  require("mesh-nvim.pick").from_semantic(items, "Test")
+  assert(captured and captured.title == "Test" and #captured.items == 1, "picker not called")
+  assert(#captured.format(items[1], nil) >= 2, "format produced no chunks")
+  captured.confirm({ close = function() end }, items[1])
+  assert(vim.api.nvim_buf_get_name(0):match("alpha%.md$"), "wrong buffer: " .. vim.api.nvim_buf_get_name(0))
+  assert(vim.api.nvim_win_get_cursor(0)[1] == 8, "cursor not on line 8")
+end)
+
 -- Real model: downloads bge-small on first run (~130 MB). Opt in with MESH_SMOKE_MODEL=1.
 if vim.env.MESH_SMOKE_MODEL == "1" then
   check("embeddings are written, then nothing changes", function()

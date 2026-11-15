@@ -56,6 +56,14 @@ Neovim plugin for a Markdown note vault: Rust `cdylib` (`mesh`) indexes notes in
 ## Search and database handles
 
 - `Db::init` takes a process-wide gate that is held until the handle drops, so at most one `Db` exists per process. Two live connections to one file crashed a query after a write through the other (SIGSEGV, reproduced in tests). Never keep a `Db` alive across code that opens another one. `update_embeddings` drops its handle before the long embedding loop; keep it that way.
-- Search: `semantic_search::search` (candidates: top 100 by cosine, top 50 by keyword; score = 0.6 semantic + 0.2 keyword + 0.2 graph, missing signals redistributed). Graph uses link/parent edges, shared authors and IDF-weighted tags against seed notes; a note never counts as its own seed.
+- Search: `semantic_search::search` (candidates: top 100 by cosine, top 50 by keyword; defaults: prompt 0.6 semantic + 0.2 keyword + 0.0 graph; note search 0.6 semantic + 0.4 graph; missing signals redistributed). Graph uses link/parent edges, shared authors and IDF-weighted tags against seed notes; a note never counts as its own seed.
 - Keyword line targeting (Stage 3) is keyword-only; there is no on-the-fly line embedding.
 - Evaluation notes and measured recall are in `docs/semantic-eval.md`.
+
+## Semantic search front end
+
+- Commands (created in `setup`): `:MeshSearch[!] [prompt]` (bang uses the current note as context), `:MeshSearchNote [note id]`, `:MeshEmbed` (background refresh). Entry points: `require("mesh-nvim").semantic_search`, `.semantic_search_note`, `.refresh_embeddings`.
+- `lua/mesh-nvim/semantic.lua` holds the options and the pure item builder (no snacks at load time, so headless tests can use it). `pick.from_semantic` builds the snacks picker; confirm opens the note at the hit line via `buf.open`.
+- Config: `semantic = { enabled, limit, group, refine_line, graph_seeds, weights }`, deep-merged in `config.set_opts`. `weights` defaults to nil so each query type keeps its own default.
+- Default weights: prompt search semantic 0.6 / keyword 0.2 / graph 0.0 (graph lowered recall in the sweep); note search semantic 0.6 / keyword 0 / graph 0.4 (not yet measured).
+- Evaluation: `tests/semantic_eval.lua` (see `docs/semantic-eval.md`). Search is linear in the number of chunks; see the scaling note there before expecting medium-vault latency.

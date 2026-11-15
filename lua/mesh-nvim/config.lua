@@ -15,6 +15,14 @@ M.config = {
   vaults = {
     default = "none",
   },
+  semantic = {
+    enabled = true,
+    limit = 20,
+    group = "mixed",
+    refine_line = true,
+    graph_seeds = true,
+    weights = nil,
+  },
 }
 
 ---@type vault_config
@@ -26,7 +34,9 @@ M.current_vault = {
 
 ---@param opts? opts
 function M.set_opts(opts)
+  local defaults = M.config.semantic
   M.config = vim.tbl_extend("force", M.config, opts or {})
+  M.config.semantic = vim.tbl_deep_extend("force", defaults, (opts and opts.semantic) or {})
 
   local db_root = util.get_paths().data_dir
   vim.fn.mkdir(db_root, "p")

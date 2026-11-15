@@ -244,4 +244,30 @@ function M.vault()
   snacks_picker.pick(pick_opts)
 end
 
+---@param items table[] from `mesh-nvim.semantic`
+---@param title string
+function M.from_semantic(items, title)
+  snacks_picker.pick({
+    title = title,
+    items = items,
+    layout = picker_opts.layout,
+    preview = "file",
+    format = function(item, _)
+      local ret = {}
+      ret[#ret + 1] = { ("%.2f "):format(item.score), "Comment" }
+      ret[#ret + 1] = { set_string_width(item.kind, 8) .. " ", "Fg" }
+      ret[#ret + 1] = { set_string_width(item.title, 36) .. " ", "markdownBoldItalic" }
+      if item.heading then
+        ret[#ret + 1] = { set_string_width(item.heading, 28) .. " ", "markdownItalic" }
+      end
+      ret[#ret + 1] = { item.snippet, "Fg" }
+      return ret
+    end,
+    confirm = function(picker, item)
+      picker:close()
+      require("mesh-nvim.buf").open({ path = item.path, row = item.row, col = item.col })
+    end,
+  })
+end
+
 return M

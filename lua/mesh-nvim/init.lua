@@ -7,6 +7,7 @@ local pick = require "mesh-nvim.pick"
 local config = require "mesh-nvim.config"
 local comp = require "mesh-nvim.completion"
 local embed = require "mesh-nvim.embed"
+local semantic = require "mesh-nvim.semantic"
 
 local M = {}
 
@@ -23,6 +24,16 @@ M.setup = function(opts)
   M.update()
   comp.register_providers()
   embed.warm()
+
+  vim.api.nvim_create_user_command("MeshSearch", function(args)
+    semantic.search(args.args ~= "" and args.args or nil, { context_note = args.bang or nil })
+  end, { nargs = "*", bang = true, desc = "Semantic search; ! uses the current note as context" })
+  vim.api.nvim_create_user_command("MeshSearchNote", function(args)
+    semantic.search_note(args.args ~= "" and args.args or nil)
+  end, { nargs = "?", desc = "Find notes related to a note (default: current)" })
+  vim.api.nvim_create_user_command("MeshEmbed", function()
+    embed.refresh()
+  end, { desc = "Refresh semantic embeddings in the background" })
 
   local group = vim.api.nvim_create_augroup("mesh", { clear = true })
 
@@ -119,6 +130,8 @@ end
 
 M.create = create
 M.refresh_embeddings = embed.refresh
+M.semantic_search = semantic.search
+M.semantic_search_note = semantic.search_note
 M.find = find
 M.buf = buf
 M.pick = pick
