@@ -68,7 +68,7 @@ impl Db {
         Ok(current.is_some())
     }
 
-    fn query_all<T>(
+    pub(crate) fn query_all<T>(
         &self,
         sql: &str,
         map: impl FnMut(&Row<'_>) -> duckdb::Result<T>,
@@ -244,7 +244,7 @@ impl Db {
 
 /// duckdb's parameter binding cannot send lists, so vectors are bound as text
 /// and cast to `FLOAT[]` in SQL.
-fn vector_literal(vector: &[f32]) -> String {
+pub(crate) fn vector_literal(vector: &[f32]) -> String {
     let items: Vec<String> = vector.iter().map(f32::to_string).collect();
     format!("[{}]", items.join(","))
 }

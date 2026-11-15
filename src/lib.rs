@@ -10,6 +10,7 @@ pub mod fold_rest;
 pub mod note;
 pub mod parse;
 pub mod results;
+pub mod semantic_search;
 pub mod trier;
 
 pub use db::DbValue;
@@ -211,6 +212,63 @@ fn warm_model(db_file: &str) -> Result<String> {
 fn warm_model(_db_file: &str) -> Result<String> {
     Err(MyError::String(
         "built without the semantic feature".to_string(),
+    ))
+}
+
+#[cfg(feature = "semantic")]
+fn query_embedder(db_file: &str) -> Result<Box<dyn embeddings::Embedder>> {
+    Ok(Box::new(embeddings::OnnxEmbedder::load(Path::new(
+        db_file,
+    ))?))
+}
+
+#[cfg(not(feature = "semantic"))]
+fn query_embedder(_db_file: &str) -> Result<Box<dyn embeddings::Embedder>> {
+    Err(MyError::String(
+        "built without the semantic feature".to_string(),
+    ))
+}
+
+fn parse_search_opts(table: Option<LuaTable>) -> LuaResult<semantic_search::SearchOpts> {
+    let mut opts = semantic_search::SearchOpts::default();
+    let Some(table) = table else {
+        return Ok(opts);
+    };
+    if let Some(limit) = table.get::<Option<usize>>("limit")? {
+        opts.limit = limit;
+    }
+    if let Some(group) = table.get::<Option<String>>("group")? {
+        opts.group = semantic_search::Group::parse(&group)
+            .ok_or_else(|| LuaError::RuntimeError(format!("unknown group '{group}'")))?;
+    }
+    if let Some(exclude) = table.get::<Option<Vec<String>>>("exclude_ids")? {
+        opts.exclude_ids = exclude;
+    }
+    if let Some(graph_seeds) = table.get::<Option<bool>>("graph_seeds")? {
+        opts.graph_seeds = graph_seeds;
+    }
+    if let Some(refine_line) = table.get::<Option<bool>>("refine_line")? {
+        opts.refine_line = refine_line;
+    }
+    if let Some(filters) = table.get::<Option<LuaTable>>("filters")? {
+        opts.types = filters.get::<Option<Vec<String>>>("type")?;
+        if let Some(tags) = filters.get::<Option<Vec<String>>>("tags")? {
+            opts.tags = tags;
+        }
+    }
+    Ok(opts)
+}
+
+fn run_search(
+    db: db::Db,
+    db_file: &str,
+    query: semantic_search::Query,
+    opts: &semantic_search::SearchOpts,
+) -> Result<DbValue> {
+    let embedder = query_embedder(db_file)?;
+    let hits = semantic_search::search(&db, embedder.as_ref(), &query, opts)?;
+    Ok(DbValue::List(
+        hits.iter().map(semantic_search::Hit::to_db_value).collect(),
     ))
 }
 
@@ -474,6 +532,41 @@ fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
             };
             Ok(ReturnValue(vec![message]))
         })?,
+    )?;
+
+    exports.set(
+        "semantic_search_prompt",
+        lua.create_function(
+            |lua,
+             (notes_dir, db_file, prompt, context_note, opts): (
+                String,
+                String,
+                String,
+                Option<String>,
+                Option<LuaTable>,
+            )| {
+                let opts = parse_search_opts(opts)?;
+                lua_db(lua, &db_file, &notes_dir, |db| {
+                    let query = semantic_search::Query::Prompt {
+                        text: prompt,
+                        context_note,
+                    };
+                    run_search(db, &db_file, query, &opts)
+                })
+            },
+        )?,
+    )?;
+
+    exports.set(
+        "semantic_search_note",
+        lua.create_function(
+            |lua, (notes_dir, db_file, note_id, opts): (String, String, String, Option<LuaTable>)| {
+                let opts = parse_search_opts(opts)?;
+                lua_db(lua, &db_file, &notes_dir, |db| {
+                    run_search(db, &db_file, semantic_search::Query::Note(note_id), &opts)
+                })
+            },
+        )?,
     )?;
 
     Ok(exports)

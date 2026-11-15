@@ -11,7 +11,20 @@ pub trait Embedder {
     fn model_id(&self) -> &str;
     fn dim(&self) -> usize;
     fn embed(&self, texts: &[String]) -> Result<Vec<Vec<f32>>>;
+
+    /// Embeds a search prompt. Models that expect a retrieval instruction
+    /// override this; passages are always embedded with [`Embedder::embed`].
+    fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        let mut vectors = self.embed(&[text.to_string()])?;
+        vectors
+            .pop()
+            .ok_or_else(|| MyError::String("embedder returned no vector".to_string()))
+    }
 }
+
+/// Retrieval instruction for bge: applied to prompts only.
+#[cfg(feature = "semantic")]
+pub const BGE_QUERY_PREFIX: &str = "Represent this sentence for searching relevant passages: ";
 
 #[cfg(feature = "semantic")]
 pub const ONNX_MODEL_ID: &str = "BAAI/bge-small-en-v1.5";
@@ -70,6 +83,13 @@ impl Embedder for OnnxEmbedder {
         model
             .embed(texts, Some(32))
             .map_err(|error| MyError::String(format!("embedding failed: {error}")))
+    }
+
+    fn embed_query(&self, text: &str) -> Result<Vec<f32>> {
+        let mut vectors = self.embed(&[format!("{BGE_QUERY_PREFIX}{text}")])?;
+        vectors
+            .pop()
+            .ok_or_else(|| MyError::String("embedder returned no vector".to_string()))
     }
 }
 

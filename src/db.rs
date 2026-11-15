@@ -3,6 +3,7 @@ use std::{
     fmt::Display,
     ops::{Deref, DerefMut},
     path::PathBuf,
+    sync::{Mutex, MutexGuard},
     time::{Instant, SystemTime},
     vec,
 };
@@ -357,14 +358,25 @@ impl DbValue {
 pub struct Db {
     pub(crate) connection: duckdb::Connection,
     pub(crate) notes_path: PathBuf,
+    // Held for the life of the handle: at most one connection per process.
+    // Two live connections to one file let a write from one crash a query
+    // on the other (observed as SIGSEGV), and the embedding worker thread
+    // shares the process with the main Lua thread.
+    _gate: MutexGuard<'static, ()>,
     // pub(crate) errors: Vec<MyError>,
 }
 
+static DB_GATE: Mutex<()> = Mutex::new(());
+
 impl Db {
     pub fn init(notes_dir: &std::path::Path, db_path: &std::path::Path) -> Result<Self> {
+        let gate = DB_GATE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let db = Self {
             connection: duckdb::Connection::open(db_path)?,
             notes_path: notes_dir.to_path_buf(),
+            _gate: gate,
             // errors: vec![],
         };
 

@@ -83,6 +83,18 @@ if vim.env.MESH_SMOKE_MODEL == "1" then
     local second = bin.update_embeddings(notes, db)
     assert(second[1].opts:match("Embeddings: 0 written, 0 removed"), second[1].opts)
   end)
+  check("prompt search returns located hits", function()
+    local hits = bin.semantic_search_prompt(notes, db, "pasta with garlic", nil, {})
+    assert(#hits >= 1, "no hits")
+    assert(hits[1].path and hits[1].line >= 1, "missing location")
+    assert(hits[1].score > 0, "score not positive")
+  end)
+  check("note search excludes the source note", function()
+    local hits = bin.semantic_search_note(notes, db, "Alpha", {})
+    for _, hit in ipairs(hits) do
+      assert(hit.note_id ~= "Alpha", "source note returned")
+    end
+  end)
 end
 
 vim.fn.delete(root, "rf")

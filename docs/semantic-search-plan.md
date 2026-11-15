@@ -145,12 +145,8 @@ Graph is measured against **seed notes**: the context note, or the note itself f
 
 When a signal is unavailable (no seeds, no tags) its weight is **redistributed** pro rata so scores stay comparable.
 
-**Stage 3 - best-matching line** (top results only, no extra storage)
-For the top `limit` hits, split the chunk into lines/sentences and pick the jump target:
-1. Embed those lines on the fly with the warm model (small batch: ~10 hits x ~10 lines) and take the highest cosine to the query vector; if the model is unavailable or too slow, fall back to
-2. the line with the most query-term matches, else
-3. the chunk start.
-`Hit.line` is the chosen line (absolute 1-based, derived from the chunk's `line` + offset); `Hit.chunk_line` keeps the chunk start. Blank lines, headings-only lines and frontmatter lines are skipped. Budget: Stage 3 adds <= 100 ms warm (measured in S1); `opts.refine_line = false` disables it.
+**Stage 3 - best-matching line** (keyword only; decided after S1 measured on-the-fly line embedding at ~2 s per 100 lines)
+For anchor hits, re-read the anchor's own section from `contents` (lines from the heading up to the next heading of the same note) and pick the line with the most query-term matches. Blank lines and heading-only lines are skipped. If no line matches, the chunk start is used. `Hit.line` is that absolute 1-based line; `Hit.chunk_line` keeps the section's heading line; `Hit.start_col`/`end_col` cover the chosen line's text. `opts.refine_line = false` disables it. No model call is made, so it costs one indexed query per hit.
 
 **Assembly**
 - Keep the best chunk per anchor; aggregate a note row from its best chunk.

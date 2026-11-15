@@ -52,3 +52,10 @@ Neovim plugin for a Markdown note vault: Rust `cdylib` (`mesh`) indexes notes in
 - Model weights (`BAAI/bge-small-en-v1.5`) download on first use to `<db dir>/models` (`stdpath("data")/mesh/models`). Nothing is fetched at build time.
 - Embedding refresh (`lua/mesh-nvim/embed.lua`) runs in its own thread, is never joined by `util.try`, and runs after saves (debounced). Warm-up runs at setup.
 - `tests/smoke.lua` downloads the model only when `MESH_SMOKE_MODEL=1`; `cargo test --lib` uses a fake embedder and needs no network.
+
+## Search and database handles
+
+- `Db::init` takes a process-wide gate that is held until the handle drops, so at most one `Db` exists per process. Two live connections to one file crashed a query after a write through the other (SIGSEGV, reproduced in tests). Never keep a `Db` alive across code that opens another one. `update_embeddings` drops its handle before the long embedding loop; keep it that way.
+- Search: `semantic_search::search` (candidates: top 100 by cosine, top 50 by keyword; score = 0.6 semantic + 0.2 keyword + 0.2 graph, missing signals redistributed). Graph uses link/parent edges, shared authors and IDF-weighted tags against seed notes; a note never counts as its own seed.
+- Keyword line targeting (Stage 3) is keyword-only; there is no on-the-fly line embedding.
+- Evaluation notes and measured recall are in `docs/semantic-eval.md`.
