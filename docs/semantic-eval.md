@@ -45,6 +45,8 @@ Chunk text now includes the parent note title (from `refs.kind = 'parent'`) in t
 
 The refresh re-embeds every chunk whose text changed; on this vault that was 225 s. The `text_hash` check makes this automatic.
 
+The numbers above and in the sweep below predate the result caps (`max_per_note` / `max_per_author`). Re-measured with the caps, set A is 10/10 at MRR 0.867 and set B is 12/12 at 0.917, i.e. unchanged within one rank step. The caps matter for list quality rather than these metrics: the Marx query now returns two chapters of the target's book plus the book note, instead of a run of sibling chapters from the same author.
+
 ### Weight sweep after the chunking fix
 
 | Setting | A recall / MRR | B recall / MRR |
