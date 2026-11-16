@@ -23,7 +23,11 @@ M.setup = function(opts)
 
   M.update()
   comp.register_providers()
-  embed.warm()
+  if config.config.semantic.enabled ~= false then
+    -- Warm the model and resume any incomplete index from a previous session.
+    embed.warm()
+    embed.refresh()
+  end
 
   vim.api.nvim_create_user_command("MeshSearch", function(args)
     semantic.search(args.args ~= "" and args.args or nil, { context_note = args.bang or nil })
@@ -130,6 +134,7 @@ end
 
 M.create = create
 M.refresh_embeddings = embed.refresh
+M.embed_status = embed.status
 M.semantic_search = semantic.search
 M.semantic_search_note = semantic.search_note
 M.find = find

@@ -22,6 +22,9 @@ M.config = {
     refine_line = true,
     graph_seeds = true,
     weights = nil,
+    max_per_note = 2,
+    max_per_author = 2,
+    high_score = 0.85,
   },
 }
 

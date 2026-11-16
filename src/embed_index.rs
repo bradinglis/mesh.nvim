@@ -25,6 +25,7 @@ pub fn update_embeddings(
     embedder: &dyn Embedder,
     notes_dir: &Path,
     db_file: &Path,
+    progress: &mut dyn FnMut(usize, usize),
 ) -> Result<IndexReport> {
     let (cleared, obsolete, to_embed) = {
         let db = Db::init(notes_dir, db_file)?;
@@ -40,6 +41,10 @@ pub fn update_embeddings(
     };
     let mut pending_removals = obsolete;
     let mut jobs = to_embed;
+    let total = jobs.len();
+    if total > 0 {
+        progress(0, total);
+    }
 
     while !jobs.is_empty() {
         let batch: Vec<ChunkJob> = jobs.drain(..jobs.len().min(BATCH_SIZE)).collect();
@@ -60,6 +65,7 @@ pub fn update_embeddings(
             &rows,
         )?;
         report.embedded += rows.len();
+        progress(report.embedded, total);
     }
 
     if !pending_removals.is_empty() {
@@ -128,10 +134,10 @@ mod tests {
         Db::init(&notes, &db_file).unwrap().process_files().unwrap();
 
         let embedder = FakeEmbedder::standard();
-        let first = update_embeddings(&embedder, &notes, &db_file).unwrap();
+        let first = update_embeddings(&embedder, &notes, &db_file, &mut |_, _| {}).unwrap();
         assert!(!first.cleared && first.embedded > 0);
 
-        let second = update_embeddings(&embedder, &notes, &db_file).unwrap();
+        let second = update_embeddings(&embedder, &notes, &db_file, &mut |_, _| {}).unwrap();
         assert_eq!(
             second,
             IndexReport {
@@ -143,7 +149,7 @@ mod tests {
 
         fs::remove_file(notes.join("beta.md")).unwrap();
         Db::init(&notes, &db_file).unwrap().process_files().unwrap();
-        let third = update_embeddings(&embedder, &notes, &db_file).unwrap();
+        let third = update_embeddings(&embedder, &notes, &db_file, &mut |_, _| {}).unwrap();
         assert!(third.removed > 0);
         assert_eq!(third.embedded, 0);
     }
@@ -161,7 +167,8 @@ mod tests {
         fs::write(notes.join("big.md"), text).unwrap();
         Db::init(&notes, &db_file).unwrap().process_files().unwrap();
 
-        let report = update_embeddings(&FakeEmbedder::standard(), &notes, &db_file).unwrap();
+        let report =
+            update_embeddings(&FakeEmbedder::standard(), &notes, &db_file, &mut |_, _| {}).unwrap();
         assert!(
             report.embedded > BATCH_SIZE,
             "expected multiple batches, got {}",

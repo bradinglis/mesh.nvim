@@ -96,6 +96,22 @@ check("semantic picker opens the note at the hit line", function()
   require("mesh-nvim.pick").from_semantic(items, "Test")
   assert(captured and captured.title == "Test" and #captured.items == 1, "picker not called")
   assert(#captured.format(items[1], nil) >= 2, "format produced no chunks")
+  local chunks = captured.format({
+    kind = "section",
+    title = string.rep("W", 60),
+    heading = string.rep("h", 60),
+    score = 0.5,
+    snippet = "s",
+  }, nil)
+  assert(chunks[3][1]:match("…"), "long title not truncated with an ellipsis")
+  assert(
+    vim.fn.strdisplaywidth(chunks[3][1]) == 37,
+    "title column is " .. vim.fn.strdisplaywidth(chunks[3][1]) .. " wide"
+  )
+  assert(
+    vim.fn.strdisplaywidth(chunks[4][1]) == 29,
+    "heading column is " .. vim.fn.strdisplaywidth(chunks[4][1]) .. " wide"
+  )
   captured.confirm({ close = function() end }, items[1])
   assert(vim.api.nvim_buf_get_name(0):match("alpha%.md$"), "wrong buffer: " .. vim.api.nvim_buf_get_name(0))
   assert(vim.api.nvim_win_get_cursor(0)[1] == 8, "cursor not on line 8")
@@ -104,9 +120,14 @@ end)
 -- Real model: downloads bge-small on first run (~130 MB). Opt in with MESH_SMOKE_MODEL=1.
 if vim.env.MESH_SMOKE_MODEL == "1" then
   check("embeddings are written, then nothing changes", function()
-    local first = bin.update_embeddings(notes, db)
+    local calls = {}
+    local first = bin.update_embeddings(notes, db, function(done, total)
+      calls[#calls + 1] = { done, total }
+    end)
     assert(first[1] and first[1].run == "log", "refresh failed: " .. vim.inspect(first))
     assert(first[1].opts:match("Embeddings: %d+ written"), first[1].opts)
+    local last = calls[#calls]
+    assert(last and last[2] > 0 and last[1] == last[2], "no progress: " .. vim.inspect(calls))
     local second = bin.update_embeddings(notes, db)
     assert(second[1].opts:match("Embeddings: 0 written, 0 removed"), second[1].opts)
   end)

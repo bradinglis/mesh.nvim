@@ -3,6 +3,7 @@
 -- responsive while a large vault is embedded.
 local util = require "mesh-nvim.util"
 local config = require "mesh-nvim.config"
+local progress = require "mesh-nvim.progress"
 
 local M = {}
 
@@ -14,9 +15,21 @@ local scheduled = false
 local channel = vim.uv.new_async(vim.schedule_wrap(function(run, opts)
   if run == "done" then
     running = false
+    progress.finish()
     if pending then
       pending = false
       M.refresh()
+    end
+    return
+  end
+  if run == "progress" then
+    if opts == "start" then
+      progress.start("Embedding")
+    else
+      local done, total = opts:match("^(%d+) (%d+)$")
+      if done then
+        progress.update(tonumber(done), tonumber(total))
+      end
     end
     return
   end
@@ -43,7 +56,10 @@ local function worker(handle, release_dir, action, dir, db)
     if action == "warm" then
       actions = mesh.warm_model(db)
     else
-      actions = mesh.update_embeddings(dir, db)
+      handle:send("progress", "start")
+      actions = mesh.update_embeddings(dir, db, function(done, total)
+        handle:send("progress", ("%d %d"):format(done, total))
+      end)
     end
     for _, value in ipairs(actions) do
       handle:send(tostring(value.run), tostring(value.opts))
@@ -102,6 +118,12 @@ function M.schedule(delay)
     scheduled = false
     M.refresh()
   end, delay or 1000)
+end
+
+--- Progress of the running refresh, for a statusline, or `""` when idle.
+---@return string
+function M.status()
+  return progress.status()
 end
 
 return M

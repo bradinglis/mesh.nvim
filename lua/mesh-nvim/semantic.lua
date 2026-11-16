@@ -61,6 +61,9 @@ local function options(opts)
     refine_line = semantic.refine_line,
     graph_seeds = semantic.graph_seeds,
     weights = semantic.weights,
+    max_per_note = semantic.max_per_note,
+    max_per_author = semantic.max_per_author,
+    high_score = semantic.high_score,
   }, opts or {})
 end
 

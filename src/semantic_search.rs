@@ -130,6 +130,14 @@ pub struct SearchOpts {
     pub graph_seeds: bool,
     pub refine_line: bool,
     pub weights: WeightOverrides,
+    /// Most results for one note. `0` disables the cap.
+    pub max_per_note: usize,
+    /// Most child sources (chapters) from one author, unless `high_score`.
+    /// `0` disables the cap.
+    pub max_per_author: usize,
+    /// Score at or above which a child source is kept regardless of the
+    /// per-author cap.
+    pub high_score: f32,
 }
 
 impl Default for SearchOpts {
@@ -143,6 +151,9 @@ impl Default for SearchOpts {
             graph_seeds: true,
             refine_line: true,
             weights: WeightOverrides::default(),
+            max_per_note: 2,
+            max_per_author: 2,
+            high_score: 0.85,
         }
     }
 }
@@ -346,6 +357,8 @@ struct Corpus {
     tag_df: HashMap<String, usize>,
     /// Link and parent edges, stored in both directions.
     adjacency: HashMap<String, Vec<(String, f32)>>,
+    /// Child note -> its parent notes (chapters -> their book).
+    parents: HashMap<String, HashSet<String>>,
     authors: HashMap<String, HashSet<String>>,
     anchor_titles: HashMap<String, String>,
 }
@@ -505,6 +518,7 @@ fn load_corpus(db: &Db, query: &[f32], terms: &[String]) -> Result<Corpus> {
         .collect();
 
     let mut adjacency: HashMap<String, Vec<(String, f32)>> = HashMap::new();
+    let mut parents: HashMap<String, HashSet<String>> = HashMap::new();
     let mut authors: HashMap<String, HashSet<String>> = HashMap::new();
     for (note, kind, to_anchor) in
         db.query_all("select note_id, kind, to_anchor from refs", |row| {
@@ -518,7 +532,13 @@ fn load_corpus(db: &Db, query: &[f32], terms: &[String]) -> Result<Corpus> {
         let target = anchor_owner.get(&to_anchor).cloned().unwrap_or(to_anchor);
         let weight = match kind.as_str() {
             "intext_link" | "frontmatter_reference" => LINK_WEIGHT,
-            "parent" => PARENT_WEIGHT,
+            "parent" => {
+                parents
+                    .entry(note.clone())
+                    .or_default()
+                    .insert(target.clone());
+                PARENT_WEIGHT
+            }
             "author" => {
                 authors.entry(note).or_default().insert(target);
                 continue;
@@ -539,6 +559,7 @@ fn load_corpus(db: &Db, query: &[f32], terms: &[String]) -> Result<Corpus> {
         tags,
         tag_df,
         adjacency,
+        parents,
         authors,
         anchor_titles,
     })
@@ -744,9 +765,10 @@ fn top_notes(corpus: &Corpus, count: usize) -> Vec<String> {
         .collect()
 }
 
-/// Groups scored chunks into the requested result shape. Anchors keep their
-/// best chunk; a note row is kept only when its best chunk is the note itself,
-/// otherwise the anchor row already covers it.
+/// Groups scored chunks into the requested result shape, then fills up to
+/// `limit` while capping repeats of one note and of child sources by one
+/// author. Anchors keep their best chunk; a note row is kept only when its
+/// best chunk is the note itself, otherwise the anchor row already covers it.
 fn assemble(corpus: &Corpus, scored: &[Scored], opts: &SearchOpts) -> Vec<Scored> {
     let mut best_anchor: HashMap<(String, String), Scored> = HashMap::new();
     let mut best_note: HashMap<String, Scored> = HashMap::new();
@@ -781,8 +803,44 @@ fn assemble(corpus: &Corpus, scored: &[Scored], opts: &SearchOpts) -> Vec<Scored
     };
     out.retain(|item| item.score > 0.0);
     out.sort_by(|a, b| b.score.total_cmp(&a.score));
-    out.truncate(opts.limit);
-    out
+
+    let mut note_counts: HashMap<&str, usize> = HashMap::new();
+    let mut author_counts: HashMap<&str, usize> = HashMap::new();
+    let mut kept: Vec<Scored> = Vec::with_capacity(opts.limit.min(out.len()));
+    for item in out {
+        if kept.len() >= opts.limit {
+            break;
+        }
+        let note = corpus.rows[item.index].key.note_id.as_str();
+        let note_count = note_counts.entry(note).or_insert(0);
+        if opts.max_per_note > 0 && *note_count >= opts.max_per_note {
+            continue;
+        }
+        if let Some(author) = child_source_author(corpus, note) {
+            let author_count = author_counts.entry(author).or_insert(0);
+            if opts.max_per_author > 0
+                && *author_count >= opts.max_per_author
+                && item.score < opts.high_score
+            {
+                continue;
+            }
+            *author_count += 1;
+        }
+        *note_count += 1;
+        kept.push(item);
+    }
+    kept
+}
+
+/// The author of a child source: a `source` note that has a parent (a chapter
+/// of a book). Everything else returns `None`, so the per-author cap only
+/// applies to chapters.
+fn child_source_author<'a>(corpus: &'a Corpus, note: &str) -> Option<&'a str> {
+    let info = corpus.notes.get(note)?;
+    if info.note_type != "source" || corpus.parents.get(note).is_none_or(HashSet::is_empty) {
+        return None;
+    }
+    corpus.authors.get(note)?.iter().min().map(String::as_str)
 }
 
 fn build_hit(
@@ -1051,7 +1109,7 @@ mod search_tests {
             let db = Db::init(&notes, &db_file).unwrap();
             db.process_files().unwrap();
         }
-        update_embeddings(&FakeEmbedder::standard(), &notes, &db_file).unwrap();
+        update_embeddings(&FakeEmbedder::standard(), &notes, &db_file, &mut |_, _| {}).unwrap();
         let db = Db::init(&notes, &db_file).unwrap();
         (db, notes, db_file)
     }
@@ -1220,5 +1278,128 @@ mod search_tests {
         )
         .unwrap();
         assert!(hits.iter().all(|h| h.note_id == "Beta"));
+    }
+
+    fn chunk_row(note: &str, anchor: &str) -> Row {
+        let scope = if anchor.is_empty() {
+            ChunkScope::Note
+        } else {
+            ChunkScope::Anchor
+        };
+        Row {
+            key: ChunkKey {
+                note_id: note.to_string(),
+                scope,
+                anchor_id: anchor.to_string(),
+                part: 0,
+            },
+            line: None,
+            cos: 0.0,
+            mask: 0,
+        }
+    }
+
+    /// One `assemble` fixture row.
+    type Spec<'a> = (
+        &'a str,
+        &'a str,
+        f32,
+        &'a str,
+        Option<&'a str>,
+        Option<&'a str>,
+    );
+
+    /// Builds a corpus from `(note, anchor, score, type, parent, author)`
+    /// specs and runs `assemble`, returning the kept note ids in order.
+    fn assemble_notes(specs: &[Spec], opts: &SearchOpts) -> Vec<String> {
+        let mut corpus = Corpus::default();
+        let mut scored = Vec::new();
+        for (index, (note, anchor, score, note_type, parent, author)) in specs.iter().enumerate() {
+            corpus.rows.push(chunk_row(note, anchor));
+            corpus
+                .notes
+                .entry(note.to_string())
+                .or_insert_with(|| NoteInfo {
+                    title: note.to_string(),
+                    note_type: note_type.to_string(),
+                    path: format!("{note}.md"),
+                });
+            if let Some(parent) = parent {
+                corpus
+                    .parents
+                    .entry(note.to_string())
+                    .or_default()
+                    .insert(parent.to_string());
+            }
+            if let Some(author) = author {
+                corpus
+                    .authors
+                    .entry(note.to_string())
+                    .or_default()
+                    .insert(author.to_string());
+            }
+            scored.push(Scored {
+                index,
+                score: *score,
+                semantic: *score,
+                keyword: 0.0,
+                graph: 0.0,
+            });
+        }
+        assemble(&corpus, &scored, opts)
+            .iter()
+            .map(|item| corpus.rows[item.index].key.note_id.clone())
+            .collect()
+    }
+
+    #[test]
+    fn assemble_caps_repeats_of_one_note() {
+        let specs = [
+            ("A", "a1", 0.9, "note", None, None),
+            ("A", "a2", 0.8, "note", None, None),
+            ("A", "a3", 0.7, "note", None, None),
+            ("B", "b1", 0.6, "note", None, None),
+        ];
+        let notes = assemble_notes(&specs, &SearchOpts::default());
+        assert_eq!(notes, vec!["A", "A", "B"]);
+    }
+
+    #[test]
+    fn assemble_caps_child_sources_by_author() {
+        let specs = [
+            ("c1", "c1", 0.80, "source", Some("book"), Some("rubin")),
+            ("c2", "c2", 0.79, "source", Some("book"), Some("rubin")),
+            ("c3", "c3", 0.78, "source", Some("book"), Some("rubin")),
+            ("c4", "c4", 0.95, "source", Some("book"), Some("rubin")),
+            ("d", "d", 0.77, "source", None, Some("rubin")),
+        ];
+        let notes = assemble_notes(&specs, &SearchOpts::default());
+        // Two chapters by the same author (the top two scores), then the book.
+        assert_eq!(notes, vec!["c4", "c1", "d"]);
+    }
+
+    #[test]
+    fn assemble_keeps_a_child_source_above_the_high_score() {
+        let specs = [
+            ("c1", "c1", 0.95, "source", Some("book"), Some("rubin")),
+            ("c2", "c2", 0.90, "source", Some("book"), Some("rubin")),
+            ("c3", "c3", 0.88, "source", Some("book"), Some("rubin")),
+        ];
+        let notes = assemble_notes(&specs, &SearchOpts::default());
+        assert_eq!(notes, vec!["c1", "c2", "c3"]);
+    }
+
+    #[test]
+    fn assemble_zero_disables_the_caps() {
+        let specs = [
+            ("A", "a1", 0.9, "note", None, None),
+            ("A", "a2", 0.8, "note", None, None),
+            ("A", "a3", 0.7, "note", None, None),
+        ];
+        let opts = SearchOpts {
+            max_per_note: 0,
+            ..SearchOpts::default()
+        };
+        assert_eq!(assemble_notes(&specs, &opts), vec!["A", "A", "A"]);
     }
 }

@@ -63,8 +63,10 @@ Neovim plugin for a Markdown note vault: Rust `cdylib` (`mesh`) indexes notes in
 
 ## Semantic search front end
 
-- Commands (created in `setup`): `:MeshSearch[!] [prompt]` (bang uses the current note as context), `:MeshSearchNote [note id]`, `:MeshEmbed` (background refresh). Entry points: `require("mesh-nvim").semantic_search`, `.semantic_search_note`, `.refresh_embeddings`.
-- `lua/mesh-nvim/semantic.lua` holds the options and the pure item builder (no snacks at load time, so headless tests can use it). `pick.from_semantic` builds the snacks picker; confirm opens the note at the hit line via `buf.open`.
-- Config: `semantic = { enabled, limit, group, refine_line, graph_seeds, weights }`, deep-merged in `config.set_opts`. `weights` defaults to nil so each query type keeps its own default.
+- Commands (created in `setup`): `:MeshSearch[!] [prompt]` (bang uses the current note as context), `:MeshSearchNote [note id]`, `:MeshEmbed` (background refresh). Entry points: `require("mesh-nvim").semantic_search`, `.semantic_search_note`, `.refresh_embeddings`, `.embed_status`.
+- `lua/mesh-nvim/semantic.lua` holds the options and the pure item builder (no snacks at load time, so headless tests can use it). `pick.from_semantic` builds the snacks picker; confirm opens the note at the hit line via `buf.open`. `pick.set_string_width` truncates to an exact display width (ellipsis included) so columns stay aligned.
+- Config: `semantic = { enabled, limit, group, refine_line, graph_seeds, weights, max_per_note, max_per_author, high_score }`, deep-merged in `config.set_opts`. `weights` defaults to nil so each query type keeps its own default.
+- Result caps (applied while filling the list, highest score first): `max_per_note` (default 2) repeats of one note; `max_per_author` (default 2) child sources (a `source` note with a parent) per author, unless a hit scores at or above `high_score` (default 0.85). `0` disables either cap.
+- Embedding progress: `lua/mesh-nvim/progress.lua` draws a throttled bar on the message line from `update_embeddings`'s `(done, total)` callback; `embed.status()` (exposed as `mesh-nvim.embed_status`) returns a short statusline string. `setup` warms the model and then refreshes, so an interrupted first index resumes at startup.
 - Default weights: prompt search semantic 0.6 / keyword 0.2 / graph 0.0; note search semantic 0.6 / keyword 0 / graph 0.4 (not yet measured). Graph 0.2 is within noise of the prompt default after the parent-title chunk fix, so do not treat "graph hurts" as settled; see `docs/semantic-eval.md`.
 - Evaluation: `tests/semantic_eval.lua` (see `docs/semantic-eval.md`). Search is linear in the number of chunks; see the scaling note there before expecting medium-vault latency.

@@ -74,15 +74,42 @@ local picker_opts = {
   },
 }
 
+local ELLIPSIS = "…"
+
+--- Fit `text` to exactly `width` display columns, truncating with an ellipsis
+--- when needed so padded and truncated fields still line up.
 local function set_string_width(text, width)
   text = text or ""
-  local display_width = vim.fn.strdisplaywidth(text)
+  local text_width = vim.fn.strdisplaywidth(text)
 
-  if display_width > width then
-    return vim.fn.strcharpart(text, 0, width) .. "…"
+  if text_width <= width then
+    return text .. string.rep(" ", width - text_width)
   end
 
-  return text .. string.rep(" ", width - display_width)
+  local budget = width - vim.fn.strdisplaywidth(ELLIPSIS)
+  local chars = {}
+  local used = 0
+  local index = 0
+  while used < budget do
+    local char = vim.fn.strcharpart(text, index, 1)
+    if char == "" then
+      break
+    end
+    local char_width = vim.fn.strdisplaywidth(char)
+    if used + char_width > budget then
+      break
+    end
+    chars[#chars + 1] = char
+    used = used + char_width
+    index = index + 1
+  end
+
+  local truncated = table.concat(chars) .. ELLIPSIS
+  local truncated_width = vim.fn.strdisplaywidth(truncated)
+  if truncated_width < width then
+    truncated = truncated .. string.rep(" ", width - truncated_width)
+  end
+  return truncated
 end
 
 function M.from_notes(notes)

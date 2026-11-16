@@ -14,6 +14,7 @@ pub mod semantic_search;
 pub mod trier;
 
 pub use db::DbValue;
+use mlua::Function;
 pub use mlua::prelude::*;
 pub use std::{ops::Deref, path::Path};
 use thiserror::Error;
@@ -179,10 +180,19 @@ fn open_action(lua: &Lua, path: String, replace: Option<String>) -> Result<Retur
 }
 
 #[cfg(feature = "semantic")]
-fn embed_refresh(notes_dir: &str, db_file: &str) -> Result<String> {
+fn embed_refresh(notes_dir: &str, db_file: &str, progress: Option<Function>) -> Result<String> {
     let embedder = embeddings::OnnxEmbedder::load(Path::new(db_file))?;
-    let report =
-        embed_index::update_embeddings(&embedder, Path::new(notes_dir), Path::new(db_file))?;
+    let mut report_progress = |done: usize, total: usize| {
+        if let Some(callback) = &progress {
+            let _ = callback.call::<()>((done, total));
+        }
+    };
+    let report = embed_index::update_embeddings(
+        &embedder,
+        Path::new(notes_dir),
+        Path::new(db_file),
+        &mut report_progress,
+    )?;
     Ok(format!(
         "Embeddings: {} written, {} removed{}",
         report.embedded,
@@ -196,7 +206,7 @@ fn embed_refresh(notes_dir: &str, db_file: &str) -> Result<String> {
 }
 
 #[cfg(not(feature = "semantic"))]
-fn embed_refresh(_notes_dir: &str, _db_file: &str) -> Result<String> {
+fn embed_refresh(_notes_dir: &str, _db_file: &str, _progress: Option<Function>) -> Result<String> {
     Err(MyError::String(
         "built without the semantic feature".to_string(),
     ))
@@ -249,6 +259,15 @@ fn parse_search_opts(table: Option<LuaTable>) -> LuaResult<semantic_search::Sear
     }
     if let Some(refine_line) = table.get::<Option<bool>>("refine_line")? {
         opts.refine_line = refine_line;
+    }
+    if let Some(max_per_note) = table.get::<Option<usize>>("max_per_note")? {
+        opts.max_per_note = max_per_note;
+    }
+    if let Some(max_per_author) = table.get::<Option<usize>>("max_per_author")? {
+        opts.max_per_author = max_per_author;
+    }
+    if let Some(high_score) = table.get::<Option<f32>>("high_score")? {
+        opts.high_score = high_score;
     }
     if let Some(filters) = table.get::<Option<LuaTable>>("filters")? {
         opts.types = filters.get::<Option<Vec<String>>>("type")?;
@@ -525,13 +544,15 @@ fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
 
     exports.set(
         "update_embeddings",
-        lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
-            let message = match embed_refresh(&notes_dir, &db_file) {
-                Ok(text) => ("log".to_string(), text.into_lua(lua)?),
-                Err(error) => ("err".to_string(), error.to_string().into_lua(lua)?),
-            };
-            Ok(ReturnValue(vec![message]))
-        })?,
+        lua.create_function(
+            |lua, (notes_dir, db_file, progress): (String, String, Option<Function>)| {
+                let message = match embed_refresh(&notes_dir, &db_file, progress) {
+                    Ok(text) => ("log".to_string(), text.into_lua(lua)?),
+                    Err(error) => ("err".to_string(), error.to_string().into_lua(lua)?),
+                };
+                Ok(ReturnValue(vec![message]))
+            },
+        )?,
     )?;
 
     exports.set(

@@ -49,6 +49,12 @@ Manual data: vault `~/zettel`, database `~/.local/share/nvf/mesh/zettel.duckdb` 
 
 `score = w_sem*sem + w_kw*kw + w_graph*graph` (prompt 0.6/0.2/0.0; note search 0.6/0.0/0.4). Graph is a noisy-or of link (1.0), parent (0.8), author (0.6), and IDF-weighted shared tags, measured against seed notes (context note, the note itself, or top-3 semantic hits). Redistribute a missing signal's weight pro rata. Keep component scores in each result so weights can be tuned against the golden queries. Chunk text includes the parent note title (book context) in the note header and in section prefixes; chapter sections otherwise often lack the book's vocabulary.
 
+## Result shaping and progress
+
+- `assemble` fills the list highest-score-first under `max_per_note` (default 2) and `max_per_author` (default 2) for **child sources** (a `source` note with a parent). A child source scoring at or above `high_score` (default 0.85) is kept regardless. `0` disables a cap. The book note itself is not a child source, so it is not capped.
+- `update_embeddings` reports `(done, total)` to an optional Lua callback; `lua/mesh-nvim/progress.lua` renders a throttled bar on the message line and `embed.status()` feeds a statusline. `setup` warms the model then refreshes, so an interrupted first index resumes at startup.
+- Picker columns use `set_string_width`, which truncates to an exact display width (ellipsis included) so truncated and padded fields stay aligned.
+
 ## Definition of done per phase
 
 - Unit tests added for the new pure logic.
@@ -63,3 +69,4 @@ Manual data: vault `~/zettel`, database `~/.local/share/nvf/mesh/zettel.duckdb` 
 - Phase 4 (search backend): done. Prompt default graph weight 0; note search defaults in `semantic_search.rs`.
 - Phase 5 (Lua commands, picker, config): done; snacks UI verified only through a stubbed picker in the smoke test.
 - Phase 6 (tuning): weight sweep and profile recorded; parent title added to chunk context, which fixed the outstanding Marx reification miss (set A now 10/10). Open: linear search cost for a medium vault (cache or ANN, deferred), and note-search evaluation. See `docs/semantic-eval.md`.
+- Post-Phase-6: picker truncation now width-exact; embedding progress on the message line plus a startup refresh; result caps (`max_per_note` / `max_per_author` / `high_score`). Set A 10/10 mrr 0.867, set B 12/12 mrr 0.917 after the caps.

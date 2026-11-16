@@ -151,6 +151,9 @@ For anchor hits, re-read the anchor's own section from `contents` (lines from th
 **Assembly**
 - Keep the best chunk per anchor; aggregate a note row from its best chunk.
 - Default mixed list ordered by score; a note row is dropped if its best chunk is an anchor already listed. `opts.group = "anchor" | "note" | "mixed"`.
+- Caps are applied while filling the result list, highest score first, so a single note or author cannot flood it:
+  - `max_per_note` (default 2) results per note; `0` disables.
+  - `max_per_author` (default 2) **child sources** (a `source` note with a parent, i.e. a chapter) per author; `0` disables. A chapter scoring at or above `high_score` (default 0.85) is kept regardless, so a near-exact match is never hidden.
 - Filters: `type` (default excludes `author`), `tags` (any), `exclude_ids`.
 - Each `Hit` carries `path`, `line`, `start_col`, `end_col` (same conventions as `anchors`, so `buf.open` works unchanged), the three component scores, tags and a snippet.
 
@@ -169,13 +172,14 @@ mesh.semantic_search(prompt, {
 -- query by a note; defaults to the current buffer's note
 mesh.semantic_search_note(note_id, { limit = 20 })
 
-mesh.update_embeddings()            -- background; progress via vim.notify
+mesh.update_embeddings()            -- background; progress on the message line
+mesh.embed_status()                 -- "Embedding 42%" for a statusline, "" when idle
 ```
 
 - New `lua/mesh-nvim/semantic.lua` wraps the calls with `util.try`, and `pick.from_semantic(hits, title)` builds the snacks picker (score, scope icon, title, heading, snippet; file preview at `line`; `confirm` -> `buf.open{path,row,col}`).
 - If the Rust build lacks the feature (`mesh.semantic_search_prompt == nil`), Lua notifies instead of erroring.
-- `warm_model()` is called once from `setup` in a worker thread. A search before the model is ready shows "model loading".
-- Config: `semantic = { enabled, limit, weights, model, group }` in `config.lua`.
+- `warm_model()` is called once from `setup` in a worker thread, followed by a refresh so an interrupted index resumes at startup. A search before the model is ready shows "model loading".
+- Config: `semantic = { enabled, limit, weights, model, group, max_per_note, max_per_author, high_score }` in `config.lua`.
 
 ## Build and packaging
 
