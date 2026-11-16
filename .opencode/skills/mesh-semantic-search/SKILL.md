@@ -47,7 +47,7 @@ Manual data: vault `~/zettel`, database `~/.local/share/nvf/mesh/zettel.duckdb` 
 
 ## Scoring recap
 
-`score = w_sem*sem + w_kw*kw + w_graph*graph` (0.6/0.2/0.2). Graph is a noisy-or of link (1.0), parent (0.8), author (0.6), and IDF-weighted shared tags, measured against seed notes (context note, the note itself, or top-3 semantic hits). Redistribute a missing signal's weight pro rata. Keep component scores in each result so weights can be tuned against the golden queries.
+`score = w_sem*sem + w_kw*kw + w_graph*graph` (prompt 0.6/0.2/0.0; note search 0.6/0.0/0.4). Graph is a noisy-or of link (1.0), parent (0.8), author (0.6), and IDF-weighted shared tags, measured against seed notes (context note, the note itself, or top-3 semantic hits). Redistribute a missing signal's weight pro rata. Keep component scores in each result so weights can be tuned against the golden queries. Chunk text includes the parent note title (book context) in the note header and in section prefixes; chapter sections otherwise often lack the book's vocabulary.
 
 ## Definition of done per phase
 
@@ -62,4 +62,4 @@ Manual data: vault `~/zettel`, database `~/.local/share/nvf/mesh/zettel.duckdb` 
 - Phase 3 (ONNX embedder, refresh, warm-up): done.
 - Phase 4 (search backend): done. Prompt default graph weight 0; note search defaults in `semantic_search.rs`.
 - Phase 5 (Lua commands, picker, config): done; snacks UI verified only through a stubbed picker in the smoke test.
-- Phase 6 (tuning): weights swept against two query sets; profile recorded. Open: linear search cost for a medium vault (cache or ANN), and note-search evaluation. See `docs/semantic-eval.md`.
+- Phase 6 (tuning): weight sweep and profile recorded; parent title added to chunk context, which fixed the outstanding Marx reification miss (set A now 10/10). Open: linear search cost for a medium vault (cache or ANN, deferred), and note-search evaluation. See `docs/semantic-eval.md`.

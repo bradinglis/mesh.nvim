@@ -96,8 +96,8 @@ CREATE TABLE IF NOT EXISTS embeddings (
 
 Building chunks from `notes`/`anchors`/`contents`/`tags`/`refs` means existing databases can be backfilled without re-parsing, and chunking is independent of the indexing pass.
 
-- **Note chunk** (one per note): `title`, type, tags, author titles (from `refs.kind='author'` joined to `notes`), then the start of the body up to the model limit. Author notes get **only** this chunk.
-- **Anchor chunks**: lines of `contents` from an anchor's `line` to the next anchor's `line`. Prefix each chunk with `Note title > heading`. Sections over ~1,500 chars (~350 tokens) are split into windows on paragraph boundaries with ~150 chars overlap; `part` indexes the window.
+- **Note chunk** (one per note): `title`, type, tags, author titles (from `refs.kind='author'` joined to `notes`), parent note title (from `refs.kind='parent'`, for book chapters), then the start of the body up to the model limit. Author notes get **only** this chunk.
+- **Anchor chunks**: lines of `contents` from an anchor's `line` to the next anchor's `line`. Prefix each chunk with `Note title > heading`, and with the parent note title ahead of that when there is one. Sections over ~1,500 chars (~350 tokens) are split into windows on paragraph boundaries with ~150 chars overlap; `part` indexes the window.
 - Note-level score for ranking = max over the note's chunks.
 
 ## Embedding pipeline (lock-friendly, resumable)

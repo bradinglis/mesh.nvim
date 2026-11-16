@@ -29,23 +29,40 @@ Known gaps, not yet addressed:
 
 ## Phase 6: tuning and profiling
 
-Reproduce with `tests/semantic_eval.lua` against a copy of the vault database (see the header of that file). Set A is the 10 approved queries above. Set B is 12 held-out queries taken from note titles, each expecting its own note; set B exists to check that tuning on A has not overfit.
+Reproduce with `tests/semantic_eval.lua` against a copy of the vault database (see the header of that file). Set A is the 10 approved queries above. Set B is 12 held-out queries taken from note titles, each expecting its own note; the script picks every fourth non-author note by id with a title of at least 12 characters, so the set is reproducible per database and no note titles are stored in the repository. (An earlier run selected titles with `order by hash(note_id)`; that selection overlaps the current one in 1 note of 12, so numbers from the two are not comparable.)
 
-Weight sweep (semantic x keyword x graph, `limit = 20`):
+### Chunk context fix (parent title)
+
+The first tuning pass left one set A query outside the top 20: "how did Marx's theory of value account for reification" placed the target note at rank 22. The target is a chapter of *Essay on Marx's Theory of Value*, but its section chunks carried only `note title > heading`, and no chunk of the chapter contains the words "Marx", "theory", or "account". Keyword matching therefore put sibling chapters of the same book ahead of it, even though its semantic score was competitive.
+
+Chunk text now includes the parent note title (from `refs.kind = 'parent'`) in the note-level header and in each section prefix. The effect:
+
+| | Before | After |
+| --- | --- | --- |
+| Marx reification query, target rank | 22 | 1 |
+| Set A recall / MRR | 9/10, 0.800 | 10/10, 0.863 |
+| Set B recall / MRR | 12/12, 0.917 | 12/12, 0.917 |
+
+The refresh re-embeds every chunk whose text changed; on this vault that was 225 s. The `text_hash` check makes this automatic.
+
+### Weight sweep after the chunking fix
 
 | Setting | A recall / MRR | B recall / MRR |
 | --- | --- | --- |
-| sem 0.4, kw 0.0, gr 0.0 | 10/10, 0.806 | 12/12, 0.944 |
-| sem 0.6, kw 0.2, gr 0.0 (chosen) | 9/10, 0.800 | 12/12, 0.917 |
-| sem 0.6, kw 0.2, gr 0.2 (previous default) | 9/10, 0.757 | 12/12, 0.854 |
-| sem 0.6, kw 0.2, gr 0.4 | 8/10, 0.750 | 12/12, 0.845 |
+| sem 0.8, kw 0.2, gr 0.0 | 10/10, 0.864 | 12/12, 0.917 |
+| sem 0.6, kw 0.2, gr 0.0 (chosen) | 10/10, 0.863 | 12/12, 0.917 |
+| sem 0.6, kw 0.2, gr 0.2 (previous default) | 10/10, 0.861 | 12/12, 0.958 |
+| sem 0.6, kw 0.2, gr 0.4 | 9/10, 0.850 | 12/12, 0.958 |
+| sem 0.6, kw 0.0, gr 0.0 | 10/10, 0.856 | 12/12, 0.917 |
+| sem 0.6, kw 0.4, gr 0.0 | 10/10, 0.796 | 12/12, 0.917 |
 
 Findings:
 
-- **The graph term lowers quality at every setting we tried.** Without a context note, prompt search uses the top three semantic hits as pseudo-seeds, and their neighbours displace correct results. Prompt search therefore defaults to graph weight 0.
-- **Keyword weight helps modestly** (A MRR 0.757 to 0.800 from kw 0 to 0.2). Higher keyword weight did not help.
-- **Semantic-only (sem 0.4, kw 0, gr 0) has the best set A MRR (0.806)** but also drops the keyword signal entirely; the chosen setting differs by one query on set A and keeps keyword for exact terms. The difference is within the noise of 10 queries; we kept the keyword signal.
-- **Note search is not measured.** Its default (semantic 0.6, graph 0.4) relies on links, which the query sets above do not exercise. It needs its own evaluation before it is trusted.
+- **The parent title in chunk context was the largest quality fix so far.** It fixed the only remaining set A miss without changing set B.
+- **Graph is no longer clearly harmful.** After re-chunking, graph weight 0.2 keeps 10/10 on A and 12/12 on B, with A MRR 0.861 versus 0.863 and B MRR 0.958 versus 0.917. That is a difference of one rank step on A and one query's rank on B, i.e. within the noise of 22 queries. Prompt search keeps graph weight 0 because pseudo-seeds remain the least predictable part of the score; note search keeps it because links are its main relationship signal. A larger golden set would be needed to justify re-enabling it for prompts.
+- **Keyword 0.2 is still the best setting.** Raising it to 0.4 lowers set A MRR from 0.863 to 0.796.
+- **Semantic and keyword ratio:** 0.8/0.2 and 0.6/0.2 are equivalent after normalisation (0.864 versus 0.863).
+- **Note search is not measured.** Its default (semantic 0.6, keyword 0, graph 0.4) relies on links, which the query sets above do not exercise. It needs its own evaluation before it is trusted.
 
 Latency and profile (copy of the zettel database, 3,975 chunks, warm):
 
@@ -56,6 +73,6 @@ Latency and profile (copy of the zettel database, 3,975 chunks, warm):
 | corpus load: cosine scan over all chunks, keyword matching, notes/tags/refs/anchors | ~35 ms without terms, ~60 ms with terms |
 | scoring | ~1 ms |
 | per-hit snippet and line refinement (20 hits) | ~40 ms |
-| total, prompt search | ~150–230 ms |
+| total, prompt search | ~160-230 ms |
 
-The corpus scan is linear in the number of chunks. This is fine at this vault size, but a medium vault (around ten times larger) would make each search roughly a second. The likely fixes are caching vectors in memory with invalidation, or an ANN index. Both need a decision before Phase 6 can be called complete for a medium vault.
+The corpus scan is linear in the number of chunks. This is fine at this vault size, but a medium vault (around ten times larger) would make each search roughly a second. The likely fixes are caching vectors in memory with invalidation, or an ANN index. This is deliberately deferred: there is no larger vault to measure against yet. Revisit it before advertising the feature for medium or large vaults.

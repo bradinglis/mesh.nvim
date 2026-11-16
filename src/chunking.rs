@@ -39,6 +39,8 @@ pub struct ChunkJob {
 pub struct NoteSource {
     pub id: String,
     pub title: String,
+    /// Title of the parent note (for chapters of a book), when there is one.
+    pub parent_title: Option<String>,
     pub note_type: String,
     pub tags: Vec<String>,
     pub authors: Vec<String>,
@@ -82,13 +84,16 @@ pub fn build_chunks(notes: &[NoteSource]) -> Vec<ChunkJob> {
             .into_iter()
             .next()
             .unwrap_or_default();
-        let header = format!(
+        let mut header = format!(
             "{}\nType: {}\nTags: {}\nAuthors: {}",
             note.title,
             note.note_type,
             note.tags.join(", "),
             note.authors.join(", ")
         );
+        if let Some(parent) = &note.parent_title {
+            header.push_str(&format!("\nParent: {parent}"));
+        }
         jobs.push(ChunkJob::new(
             ChunkKey {
                 note_id: note.id.clone(),
@@ -119,7 +124,12 @@ pub fn build_chunks(notes: &[NoteSource]) -> Vec<ChunkJob> {
                 continue;
             }
 
-            let prefix = format!("{} > {}", note.title, anchor.heading);
+            // Chapters often never name their own book. Include the parent title
+            // so a section chunk carries the vocabulary of the work it belongs to.
+            let prefix = match &note.parent_title {
+                Some(parent) => format!("{parent} > {} > {}", note.title, anchor.heading),
+                None => format!("{} > {}", note.title, anchor.heading),
+            };
             for (part, window) in windows(&section, MAX_WINDOW_CHARS, OVERLAP_CHARS)
                 .into_iter()
                 .enumerate()
@@ -232,6 +242,7 @@ mod tests {
         NoteSource {
             id: id.to_string(),
             title: format!("Title {id}"),
+            parent_title: None,
             note_type: note_type.to_string(),
             tags: vec!["topic".to_string()],
             authors: vec!["Doe".to_string()],
@@ -323,6 +334,30 @@ mod tests {
         assert!(!anchors[0].text.contains("second body"));
         assert_eq!(anchors[0].line, Some(1));
         assert_eq!(anchors[1].line, Some(4));
+    }
+
+    #[test]
+    fn parent_title_appears_in_note_and_section_chunks() {
+        let mut note = source("alpha", "note");
+        note.parent_title = Some("Book".to_string());
+        note.anchors.push(AnchorSource {
+            anchor_id: "alpha".to_string(),
+            heading: "Alpha".to_string(),
+            line: 1,
+        });
+        note.lines = vec![(1, "# Alpha".to_string()), (2, "body".to_string())];
+
+        let jobs = build_chunks(&[note]);
+        let note_chunk = jobs
+            .iter()
+            .find(|job| job.key.scope == ChunkScope::Note)
+            .unwrap();
+        assert!(note_chunk.text.contains("\nParent: Book"));
+        let anchor = jobs
+            .iter()
+            .find(|job| job.key.scope == ChunkScope::Anchor)
+            .unwrap();
+        assert!(anchor.text.starts_with("Book > Title alpha > Alpha"));
     }
 
     #[test]

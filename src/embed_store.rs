@@ -120,6 +120,17 @@ impl Db {
             }
         }
 
+        for (note_id, parent) in self.query_all(
+            "select r.note_id, coalesce(n.note_title, n.note_id)
+             from refs r join notes n on n.note_id = r.to_anchor
+             where r.kind = 'parent'",
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        )? {
+            if let Some(&i) = index.get(&note_id) {
+                notes[i].parent_title.get_or_insert(parent);
+            }
+        }
+
         for (note_id, anchor) in self.query_all(
             "select note_id, anchor_id, title, line from anchors where line is not null",
             |row| {
