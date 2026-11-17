@@ -1,6 +1,6 @@
 # mesh.nvim
 
-Neovim plugin for a Markdown note vault: Rust `cdylib` (`mesh`) indexes notes into DuckDB; Lua under `lua/mesh-nvim/` provides UI, pickers, and completion. Depends on `snacks.nvim` and `blink.cmp`.
+Neovim plugin for a Markdown note vault: Rust `cdylib` (`mesh`) indexes notes into DuckDB; Lua under `lua/mesh-nvim/` provides UI, pickers, and completion. Depends on `snacks.nvim` and `blink.cmp`. The same crate also builds a `mesh` CLI (see `docs/cli.md`).
 
 ## Build & dev
 
@@ -12,14 +12,16 @@ Neovim plugin for a Markdown note vault: Rust `cdylib` (`mesh`) indexes notes in
 
 ## Testing
 
-- `cargo test --lib` runs 15 tests across core modules. Run annotation tests with `cargo test --lib highlights::tests::test_one`.
+- `cargo test --lib` runs the Rust unit tests across core modules (plus the CLI render/JSON/args helpers). Run annotation tests with `cargo test --lib highlights::tests::test_one`.
+- `cargo test --test cli` runs the CLI integration tests (`tests/cli.rs`); they build a throwaway vault and need no model or network.
 - PDF fixtures live in `tests/*.pdf`; keep them present when running annotation tests.
 - Last green baseline before the annotations refactor: `a6746c5` (`origin/main`).
 - Last commit before this cleanup refactor: `6c2d2c7`.
 
 ## Architecture
 
-- Rust entry: `src/lib.rs` exports the `mesh` Lua module; every function takes `(notes_dir, db_file, ...)`.
+- Rust entry: `src/lib.rs` exports the `mesh` Lua module; every function takes `(notes_dir, db_file, ...)`. The Lua-free core lives in `src/api.rs`; `lib.rs` bindings and the CLI are thin adapters over it, so their behaviour cannot drift.
+- CLI: `src/main.rs` calls `mesh::cli::run` (`src/cli/`). Hand-rolled arg parser (`args.rs`), table renderer (`render.rs`), and a minimal JSON/JSONL writer (`json.rs`). Read commands open the database through `Db::open_read_only`.
 - Lua entry: `lua/mesh-nvim/init.lua` (`setup(opts)`). `lua/mesh-nvim/binary.lua` loads `mesh` from `target/release`.
 - DB: one DuckDB file per vault at `stdpath("data")/mesh/<vault>.duckdb`; schema in `sql/clear.sql`; read queries in `sql/notes_details.sql`.
 - Notes: recursively scans the vault for `.md`, skipping `.git` and `templates`. Hashing uses `rapidhash`.
@@ -27,6 +29,14 @@ Neovim plugin for a Markdown note vault: Rust `cdylib` (`mesh`) indexes notes in
 - Skills: project-specific implementation guidance lives under `.opencode/skills/`, including `mesh-semantic-search` for the planned semantic search feature.
 - Planned work: semantic search is specified in `docs/semantic-search-plan.md` (v2); prerequisites and review findings for the existing code are in `docs/refactor-review.md`. Read both before touching the DB schema, threading, or pickers.
 - Stronger types: `NoteType`, `RefKind` (`intext_link`, `frontmatter_reference`, `author`, `parent`), and `Location` (`frontmatter`/`body`) replace stringly typed fields in the Rust core.
+
+## CLI
+
+- `mesh` (built from the same crate; `packages.mesh-cli` / `apps.mesh` in `flake.nix`) exposes the library operations to scripts and agents. Docs: `docs/cli.md`.
+- Vault/DB resolve from `--vault`/`MESH_VAULT` and `--db`/`MESH_DB`; the DB defaults to `$XDG_DATA_HOME/mesh/<vault>.duckdb`.
+- Output is a table on a TTY and JSON when piped; `--format table|json|jsonl`, `--json`, `--jsonl`, `--pretty`. Data goes to stdout, progress/errors to stderr. Exit codes: 0 success, 1 runtime error, 2 usage error.
+- Read commands use `Db::open_read_only`, which reports a vault mismatch instead of clearing the file. Write commands (`update`, `embed`) use `Db::init` and need a vault.
+- No `serde_json`/`clap`: JSON is hand-written (drops `null` list items to match Lua) and args are parsed by hand to keep startup fast.
 
 ## Gotchas
 
@@ -41,7 +51,7 @@ Neovim plugin for a Markdown note vault: Rust `cdylib` (`mesh`) indexes notes in
 - `lua/mesh-nvim/util.lua` caches `get_paths()` results.
 - Completion provider boilerplate is shared through `lua/mesh-nvim/completion/init.lua`.
 - Schema is created only by `Db::clear()` (run when the stored vault path is missing or differs). Editing `sql/clear.sql` does not change existing databases; new tables need an idempotent `CREATE TABLE IF NOT EXISTS` step in `Db::init`.
-- Every endpoint opens its own DuckDB connection (file lock) via `Db::init`, and `util.try` joins `update_thread` first, so a long-running write blocks all pickers. `M.update()` is synchronous (setup and `BufWritePost`).
+- Every endpoint opens its own DuckDB connection (file lock) via `Db::init`, and `util.try` joins `update_thread` first, so a long-running write blocks all pickers. `M.update()` is synchronous (setup and `BufWritePost`). `Db::open_read_only` (CLI reads) takes the same process-wide gate, so a process still has at most one live `Db`.
 - `DbValue::List` drops `None` items, leaving holes in the Lua table (`ipairs`/`#` stop early); avoid nullable list items in new endpoints.
 - `anchors.line` is the absolute 1-based heading line, columns are 0-based, and `anchor_id` is globally unique (a level-1 heading's anchor id equals the note id).
 - Lua has no automated tests; the Nix plugin check only requires each module. DuckDB core provides `list_cosine_similarity`; the `vss`/`fts` extensions are not installed and must not be relied on.

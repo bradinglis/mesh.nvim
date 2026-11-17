@@ -1,5 +1,7 @@
 pub mod annotations;
+pub mod api;
 pub mod chunking;
+pub mod cli;
 pub mod create;
 pub mod db;
 pub mod embed_index;
@@ -179,66 +181,6 @@ fn open_action(lua: &Lua, path: String, replace: Option<String>) -> Result<Retur
     )]))
 }
 
-#[cfg(feature = "semantic")]
-fn embed_refresh(notes_dir: &str, db_file: &str, progress: Option<Function>) -> Result<String> {
-    let embedder = embeddings::OnnxEmbedder::load(Path::new(db_file))?;
-    let mut report_progress = |done: usize, total: usize| {
-        if let Some(callback) = &progress {
-            let _ = callback.call::<()>((done, total));
-        }
-    };
-    let report = embed_index::update_embeddings(
-        &embedder,
-        Path::new(notes_dir),
-        Path::new(db_file),
-        &mut report_progress,
-    )?;
-    Ok(format!(
-        "Embeddings: {} written, {} removed{}",
-        report.embedded,
-        report.removed,
-        if report.cleared {
-            " (model changed, index rebuilt)"
-        } else {
-            ""
-        }
-    ))
-}
-
-#[cfg(not(feature = "semantic"))]
-fn embed_refresh(_notes_dir: &str, _db_file: &str, _progress: Option<Function>) -> Result<String> {
-    Err(MyError::String(
-        "built without the semantic feature".to_string(),
-    ))
-}
-
-#[cfg(feature = "semantic")]
-fn warm_model(db_file: &str) -> Result<String> {
-    embeddings::OnnxEmbedder::load(Path::new(db_file))?;
-    Ok("embedding model ready".to_string())
-}
-
-#[cfg(not(feature = "semantic"))]
-fn warm_model(_db_file: &str) -> Result<String> {
-    Err(MyError::String(
-        "built without the semantic feature".to_string(),
-    ))
-}
-
-#[cfg(feature = "semantic")]
-fn query_embedder(db_file: &str) -> Result<Box<dyn embeddings::Embedder>> {
-    Ok(Box::new(embeddings::OnnxEmbedder::load(Path::new(
-        db_file,
-    ))?))
-}
-
-#[cfg(not(feature = "semantic"))]
-fn query_embedder(_db_file: &str) -> Result<Box<dyn embeddings::Embedder>> {
-    Err(MyError::String(
-        "built without the semantic feature".to_string(),
-    ))
-}
-
 fn parse_search_opts(table: Option<LuaTable>) -> LuaResult<semantic_search::SearchOpts> {
     let mut opts = semantic_search::SearchOpts::default();
     let Some(table) = table else {
@@ -289,19 +231,6 @@ fn parse_search_opts(table: Option<LuaTable>) -> LuaResult<semantic_search::Sear
     Ok(opts)
 }
 
-fn run_search(
-    db: db::Db,
-    db_file: &str,
-    query: semantic_search::Query,
-    opts: &semantic_search::SearchOpts,
-) -> Result<DbValue> {
-    let embedder = query_embedder(db_file)?;
-    let hits = semantic_search::search(&db, embedder.as_ref(), &query, opts)?;
-    Ok(DbValue::List(
-        hits.iter().map(semantic_search::Hit::to_db_value).collect(),
-    ))
-}
-
 #[mlua::lua_module]
 fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
     let exports = lua.create_table()?;
@@ -309,37 +238,32 @@ fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
     exports.set(
         "update_index",
         lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
-            lua_db(lua, &db_file, &notes_dir, |db| {
-                // let s = db.process_files();
-                match db.process_files() {
-                    Err(e) => Ok(ReturnValue(vec![(
-                        "err".to_string(),
-                        e.to_string().into_lua(lua)?,
-                    )])),
-                    Ok(x) => Ok(ReturnValue(vec![("log".to_string(), x.into_lua(lua)?)])),
-                }
-            })
+            let message = match api::update(&notes_dir, &db_file) {
+                Ok(text) => ("log".to_string(), text.into_lua(lua)?),
+                Err(error) => ("err".to_string(), error.to_string().into_lua(lua)?),
+            };
+            Ok(ReturnValue(vec![message]))
         })?,
     )?;
 
     exports.set(
         "enter_command",
         lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
-            lua_db(lua, &db_file, &notes_dir, |db| db.get_tag_list())
+            lua_db(lua, &db_file, &notes_dir, |db| api::tags(&db))
         })?,
     )?;
 
     exports.set(
         "get_notes",
         lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
-            lua_db(lua, &db_file, &notes_dir, |db| db.get_notes())
+            lua_db(lua, &db_file, &notes_dir, |db| api::notes(&db))
         })?,
     )?;
 
     exports.set(
         "get_lines",
         lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
-            lua_db(lua, &db_file, &notes_dir, |db| db.get_lines())
+            lua_db(lua, &db_file, &notes_dir, |db| api::lines(&db))
         })?,
     )?;
 
@@ -347,7 +271,9 @@ fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
         "get_type",
         lua.create_function(
             |lua, (notes_dir, db_file, note_type): (String, String, String)| {
-                lua_db(lua, &db_file, &notes_dir, |db| db.get_type_notes(note_type))
+                lua_db(lua, &db_file, &notes_dir, |db| {
+                    api::type_notes(&db, &note_type)
+                })
             },
         )?,
     )?;
@@ -355,7 +281,7 @@ fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
     exports.set(
         "get_thin_notes",
         lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
-            lua_db(lua, &db_file, &notes_dir, |db| db.get_thin_notes())
+            lua_db(lua, &db_file, &notes_dir, |db| api::thin_notes(&db))
         })?,
     )?;
 
@@ -382,7 +308,7 @@ fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
     exports.set(
         "get_note_anchors",
         lua.create_function(|lua, (notes_dir, db_file, id): (String, String, String)| {
-            lua_db(lua, &db_file, &notes_dir, |db| db.get_note_anchors(id))
+            lua_db(lua, &db_file, &notes_dir, |db| api::note_anchors(&db, &id))
         })?,
     )?;
 
@@ -390,16 +316,14 @@ fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
         "get_backlinks",
         lua.create_function(
             |lua, (notes_dir, db_file, note): (String, String, String)| {
-                lua_db(lua, &db_file, &notes_dir, |db| db.get_backlinks(note))
+                lua_db(lua, &db_file, &notes_dir, |db| api::backlinks(&db, &note))
             },
         )?,
     )?;
 
     exports.set(
         "id_gen",
-        lua.create_function(|lua, title: String| {
-            Ok(NoteId::derive(&title).to_string().into_lua(lua))
-        })?,
+        lua.create_function(|lua, title: String| Ok(api::id_gen(&title).into_lua(lua)))?,
     )?;
 
     exports.set(
@@ -531,14 +455,14 @@ fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
     exports.set(
         "get_tags",
         lua.create_function(|lua, (notes_dir, db_file): (String, String)| {
-            lua_db(lua, &db_file, &notes_dir, |db| db.get_tag_list())
+            lua_db(lua, &db_file, &notes_dir, |db| api::tags(&db))
         })?,
     )?;
 
     exports.set(
         "get_tag_notes",
         lua.create_function(|lua, (notes_dir, db_file, tag): (String, String, String)| {
-            lua_db(lua, &db_file, &notes_dir, |db| db.get_tag_notes(tag))
+            lua_db(lua, &db_file, &notes_dir, |db| api::tag_notes(&db, &tag))
         })?,
     )?;
 
@@ -546,7 +470,12 @@ fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
         "update_embeddings",
         lua.create_function(
             |lua, (notes_dir, db_file, progress): (String, String, Option<Function>)| {
-                let message = match embed_refresh(&notes_dir, &db_file, progress) {
+                let mut report = |done: usize, total: usize| {
+                    if let Some(callback) = &progress {
+                        let _ = callback.call::<()>((done, total));
+                    }
+                };
+                let message = match api::embed_refresh(&notes_dir, &db_file, &mut report) {
                     Ok(text) => ("log".to_string(), text.into_lua(lua)?),
                     Err(error) => ("err".to_string(), error.to_string().into_lua(lua)?),
                 };
@@ -558,7 +487,7 @@ fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
     exports.set(
         "warm_model",
         lua.create_function(|lua, db_file: String| {
-            let message = match warm_model(&db_file) {
+            let message = match api::warm_model(&db_file) {
                 Ok(text) => ("log".to_string(), text.into_lua(lua)?),
                 Err(error) => ("err".to_string(), error.to_string().into_lua(lua)?),
             };
@@ -579,11 +508,7 @@ fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
             )| {
                 let opts = parse_search_opts(opts)?;
                 lua_db(lua, &db_file, &notes_dir, |db| {
-                    let query = semantic_search::Query::Prompt {
-                        text: prompt,
-                        context_note,
-                    };
-                    run_search(db, &db_file, query, &opts)
+                    api::search_prompt(&db, &db_file, &prompt, context_note, &opts)
                 })
             },
         )?,
@@ -595,7 +520,7 @@ fn mesh(lua: &Lua) -> LuaResult<LuaTable> {
             |lua, (notes_dir, db_file, note_id, opts): (String, String, String, Option<LuaTable>)| {
                 let opts = parse_search_opts(opts)?;
                 lua_db(lua, &db_file, &notes_dir, |db| {
-                    run_search(db, &db_file, semantic_search::Query::Note(note_id), &opts)
+                    api::search_note(&db, &db_file, &note_id, &opts)
                 })
             },
         )?,

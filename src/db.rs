@@ -401,6 +401,49 @@ impl Db {
         Ok(db)
     }
 
+    /// Opens the database read-only for read commands.
+    ///
+    /// Unlike [`Db::init`] this never clears the file, so a vault-path mismatch
+    /// is reported instead of silently wiping the index. When `expected_notes`
+    /// is `Some`, the vault path stored in the database must match it.
+    pub fn open_read_only(
+        db_path: &std::path::Path,
+        expected_notes: Option<&std::path::Path>,
+    ) -> Result<Self> {
+        let gate = DB_GATE
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let config = duckdb::Config::default().access_mode(duckdb::AccessMode::ReadOnly)?;
+        let db = Self {
+            connection: duckdb::Connection::open_with_flags(db_path, config)?,
+            notes_path: expected_notes
+                .unwrap_or_else(|| std::path::Path::new(""))
+                .to_path_buf(),
+            _gate: gate,
+        };
+
+        let stored: Option<String> = db
+            .connection
+            .prepare("select path from metadata")
+            .and_then(|mut stmt| stmt.query_row([], |row| row.get(0)))
+            .ok();
+
+        match (&stored, expected_notes) {
+            (Some(path), Some(expected)) if path != expected.to_str().unwrap_or("") => {
+                return Err(MyError::String(format!(
+                    "database {} belongs to vault '{}', not '{}'; pass --db for the \
+                     right database or --vault for the right vault",
+                    db_path.display(),
+                    path,
+                    expected.display()
+                )));
+            }
+            _ => {}
+        }
+
+        Ok(db)
+    }
+
     // Want this to return error as tuple/struct
     pub fn process_files(&self) -> Result<String> {
         let start = Instant::now();

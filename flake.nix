@@ -52,6 +52,43 @@
           ./tests
         ];
       };
+      commonArgs = {
+        inherit
+          src
+          nativeBuildInputs
+          buildInputs
+          version
+          ;
+        dependencies = [
+          pkgs.duckdb.lib
+        ];
+        strictDeps = false;
+        cargoVendorDir = craneLib.vendorCargoDeps {
+          src = ./.;
+        };
+      };
+      # Builds both the Lua module (`lib/libmesh.so`) and the `mesh` CLI
+      # (`bin/mesh`) from the same crate.
+      binary = craneLib.buildPackage (
+        commonArgs
+        // {
+          pname = "mesh-nvim-lib";
+          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+        }
+      );
+      # The CLI loads ONNX Runtime dynamically, so wrap it with the path the
+      # flake pins. Non-semantic commands never touch it.
+      meshCli = pkgs.runCommand "mesh-cli-${version}" {
+        nativeBuildInputs = [ pkgs.makeWrapper ];
+        meta = {
+          description = "Query a mesh.nvim vault from the command line";
+          mainProgram = "mesh";
+        };
+      } ''
+        mkdir -p $out/bin
+        makeWrapper ${binary}/bin/mesh $out/bin/mesh \
+          --set ORT_DYLIB_PATH "${onnxLib}"
+      '';
     in
     {
       devShells.${system}.default = pkgs.mkShell {
@@ -67,34 +104,9 @@
           cargo version
         '';
       };
-      packages.${system}.default = (
-        let
-          commonArgs = {
-            inherit
-              src
-              nativeBuildInputs
-              buildInputs
-              version
-              ;
-            dependencies = [
-              pkgs.duckdb.lib
-            ];
-            strictDeps = false;
-            cargoVendorDir = craneLib.vendorCargoDeps {
-              src = ./.;
-            };
-
-          };
-
-          binary = craneLib.buildPackage (
-            commonArgs
-            // {
-              pname = "mesh-nvim-lib";
-              cargoArtifacts = craneLib.buildDepsOnly commonArgs;
-            }
-          );
-        in
-        pkgs.vimUtils.buildVimPlugin {
+      packages.${system} = {
+        mesh-cli = meshCli;
+        default = pkgs.vimUtils.buildVimPlugin {
           pname = "mesh-nvim";
           inherit version src;
 
@@ -117,8 +129,11 @@
             pkgs.duckdb.lib
             pkgs.vimPlugins.snacks-nvim
           ];
-        }
-      );
-
+        };
+      };
+      apps.${system}.mesh = {
+        type = "app";
+        program = "${meshCli}/bin/mesh";
+      };
     };
 }
