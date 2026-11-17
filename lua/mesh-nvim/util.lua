@@ -1,15 +1,28 @@
 local M = {}
 
-M.get_paths = function ()
-    local source = debug.getinfo(1, "S").source:sub(2)
-    local plugin_root = vim.fn.fnamemodify(source, ":h:h:h")
-    local data_dir = vim.fn.stdpath("data") .. "/mesh"
+---@class mesh_paths
+---@field plugin_root string
+---@field data_dir string
+---@field release_dir string
 
-    return {
-        plugin_root = plugin_root,
-        data_dir = data_dir,
-        release_dir = plugin_root .. '/target/release',
-    }
+---@type mesh_paths?
+local cached_paths
+
+---@return mesh_paths
+function M.get_paths()
+  if cached_paths then
+    return cached_paths
+  end
+
+  local source = debug.getinfo(1, "S").source:sub(2)
+  local plugin_root = vim.fn.fnamemodify(source, ":h:h:h")
+
+  cached_paths = {
+    plugin_root = plugin_root,
+    data_dir = vim.fn.stdpath "data" .. "/mesh",
+    release_dir = plugin_root .. "/target/release",
+  }
+  return cached_paths
 end
 
 M.get_visual_selection = function()
@@ -95,17 +108,17 @@ function M.try(f, callback)
     p.update_thread:join()
     p.update_thread = nil
   end
-  local v1, v2, v3 = pcall(f)
 
-  if not v1 then
-    vim.notify(v2, vim.log.levels.ERROR)
+  local ok, result, extra = pcall(f)
+  if not ok then
+    vim.notify(result, vim.log.levels.ERROR)
     return
+  end
+
+  if callback then
+    callback(result, extra)
   else
-    if callback then
-      callback(v2, v3)
-    else
-      return v2, v3
-    end
+    return result, extra
   end
 end
 

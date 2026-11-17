@@ -2,12 +2,15 @@ pub struct Tryer<U> {
     inner: Option<U>,
 }
 
-impl<U> Tryer<U>
-where
-    U: Clone,
-{
-    pub fn new() -> Self {
+impl<U> Default for Tryer<U> {
+    fn default() -> Self {
         Self { inner: None }
+    }
+}
+
+impl<U> Tryer<U> {
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn or_try<F, K, J>(self, f: F) -> Tryer<U>
@@ -44,5 +47,25 @@ impl<T> From<Option<T>> for Tryer<T> {
 impl<T, E> From<Result<T, E>> for Tryer<T> {
     fn from(val: Result<T, E>) -> Self {
         Tryer { inner: val.ok() }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn or_try_uses_first_success() {
+        let value = Tryer::new()
+            .or_try(|| Some(7))
+            .or_try(|| Some(9))
+            .unwrap_or(0);
+        assert_eq!(value, 7);
+    }
+
+    #[test]
+    fn falls_back_to_default() {
+        let value = Tryer::<i32>::new().unwrap_or(42);
+        assert_eq!(value, 42);
     }
 }

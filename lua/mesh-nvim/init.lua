@@ -6,124 +6,173 @@ local find = require "mesh-nvim.find"
 local pick = require "mesh-nvim.pick"
 local config = require "mesh-nvim.config"
 local comp = require "mesh-nvim.completion"
+local embed = require "mesh-nvim.embed"
+local semantic = require "mesh-nvim.semantic"
 
 local M = {}
 
+--- The basename of the current buffer without its extension.
+---@return string
+local function current_note_id()
+  return vim.split(vim.fs.basename(vim.api.nvim_buf_get_name(0)), "%.")[1]
+end
+
+---@param opts? opts
 M.setup = function(opts)
   config.set_opts(opts)
 
   M.update()
   comp.register_providers()
+  if config.config.semantic.enabled ~= false then
+    -- Warm the model and resume any incomplete index from a previous session.
+    embed.warm()
+    embed.refresh()
+  end
+
+  vim.api.nvim_create_user_command("MeshSearch", function(args)
+    semantic.search(args.args ~= "" and args.args or nil, { context_note = args.bang or nil })
+  end, { nargs = "*", bang = true, desc = "Semantic search; ! uses the current note as context" })
+  vim.api.nvim_create_user_command("MeshSearchNote", function(args)
+    semantic.search_note(args.args ~= "" and args.args or nil)
+  end, { nargs = "?", desc = "Find notes related to a note (default: current)" })
+  vim.api.nvim_create_user_command("MeshEmbed", function()
+    embed.refresh()
+  end, { desc = "Refresh semantic embeddings in the background" })
+
+  local group = vim.api.nvim_create_augroup("mesh", { clear = true })
 
   vim.api.nvim_create_autocmd("BufEnter", {
+    group = group,
     pattern = "*.md",
     callback = function()
       comp.inject_sources()
-      M.buf.highlights()
+      buf.highlights()
     end,
   })
 
   vim.api.nvim_create_autocmd("InsertLeave", {
+    group = group,
     pattern = "*.md",
-    callback = function()
-      M.buf.highlights()
-    end,
+    callback = buf.highlights,
   })
 
   vim.api.nvim_create_autocmd("BufWritePost", {
+    group = group,
     pattern = "*.md",
     callback = function()
       M.update()
+      embed.schedule()
     end,
   })
 end
-
 
 local main_thread_channel = vim.uv.new_async(vim.schedule_wrap(function(run, opts)
   require("mesh-nvim.rfun").run(run, opts)
 end))
 
 local function update_worker(async_handle, dir, db, release_dir)
-  package.cpath = release_dir .. "/lib?.so;"
-  local res = require("mesh").update_index(dir, db)
-  for _, value in ipairs(res) do
+  local cpath = release_dir .. "/lib?.so"
+  if not package.cpath:find(cpath, 1, true) then
+    package.cpath = cpath .. ";" .. package.cpath
+  end
+
+  for _, value in ipairs(require("mesh").update_index(dir, db)) do
     async_handle:send(tostring(value.run), tostring(value.opts))
   end
 end
 
 M.update_async = function()
   local success
-  success, M.update_thread = pcall(vim.uv.new_thread, update_worker, main_thread_channel, config.current_vault.dir, config.current_vault.db, util.get_paths().release_dir)
+  success, M.update_thread = pcall(
+    vim.uv.new_thread,
+    update_worker,
+    main_thread_channel,
+    config.current_vault.dir,
+    config.current_vault.db,
+    util.get_paths().release_dir
+  )
 
   if not success then
     vim.notify("Failed to spawn thread: " .. tostring(M.update_thread), vim.log.levels.ERROR)
   end
-
 end
 
 M.update = function()
-  require("mesh-nvim.rfun").try(function ()
+  require("mesh-nvim.rfun").try(function()
     return bin.update_index(config.current_vault.dir, config.current_vault.db)
   end)
 end
 
 function M.annotations()
   local current_file = vim.api.nvim_buf_get_name(0)
+  local note_id = current_note_id()
+
   require("snacks").picker.files({
-    cwd = config.current_vault.dir .. "/annotated",
+    cwd = vim.fs.joinpath(config.current_vault.dir, "annotated"),
     confirm = function(picker, item)
       picker:close()
-      require("mesh-nvim.rfun").try(function()
+
+      util.try(function()
         return bin.get_annotations(item._path, current_file)
-      end
-      )
-      local asset_path = config.current_vault.dir ..
-          "/annotated/" .. vim.split(vim.fs.basename(vim.api.nvim_buf_get_name(0)), "%.")[1] .. ".pdf"
-      vim.fn.rename(item._path, asset_path)
-    end
+      end, function(results)
+        for _, value in ipairs(results) do
+          require("mesh-nvim.rfun").run(value.run, value.opts)
+        end
+
+        local asset_path = vim.fs.joinpath(
+          config.current_vault.dir,
+          "annotated",
+          note_id .. ".pdf"
+        )
+        if vim.fn.rename(item._path, asset_path) ~= 0 then
+          vim.notify("failed to move " .. item._path, vim.log.levels.ERROR)
+        end
+      end)
+    end,
   })
 end
 
 M.create = create
+M.refresh_embeddings = embed.refresh
+M.embed_status = embed.status
+M.semantic_search = semantic.search
+M.semantic_search_note = semantic.search_note
 M.find = find
 M.buf = buf
 M.pick = pick
-M.open_asset = function()
-  local asset_path = config.current_vault.dir ..
-      "/annotated/" .. vim.split(vim.fs.basename(vim.api.nvim_buf_get_name(0)), "%.")[1]
 
-  if vim.fn.filereadable(asset_path .. ".pdf") == 1 then
-    asset_path = asset_path .. ".pdf"
-  elseif vim.fn.filereadable(asset_path .. ".epub") == 1 then
-    asset_path = asset_path .. ".epub"
-  else
-    vim.notify("no file")
+M.open_asset = function()
+  local base = vim.fs.joinpath(config.current_vault.dir, "annotated", current_note_id())
+
+  for _, extension in ipairs({ ".pdf", ".epub" }) do
+    local path = base .. extension
+    if vim.fn.filereadable(path) == 1 then
+      vim.fn.jobstart({ "lektra", path })
+      return
+    end
   end
 
-  vim.fn.jobstart({ "lektra", asset_path })
+  vim.notify("no asset found", vim.log.levels.WARN)
 end
-
-
 
 function M.fill_from_boox()
   local function get_file_contents(file_path)
     local file = io.open(file_path, "r")
-    if file then
-      local contents = file:read("*a")
-      io.close(file)
-      return contents
-    else
-      print("Error: Cannot open file " .. file_path)
+    if not file then
+      vim.notify("Error: Cannot open file " .. file_path, vim.log.levels.ERROR)
       return nil
     end
+
+    local contents = file:read("*a")
+    io.close(file)
+    return contents
   end
 
-
   local current_buf = vim.api.nvim_get_current_buf()
-  local current_id = vim.split(vim.fs.basename(vim.api.nvim_buf_get_name(current_buf)), "%.")[1]
+  local current_id = current_note_id()
 
   require("snacks").picker.files({
-    cwd = config.current_vault.dir .. "/boox",
+    cwd = vim.fs.joinpath(config.current_vault.dir, "boox"),
     confirm = function(self, item)
       local content = get_file_contents(item._path)
       if not content then
@@ -133,8 +182,7 @@ function M.fill_from_boox()
 
       local chunks = { {} }
 
-      local lines = vim.split(content, "\n")
-      for _, value in ipairs(lines) do
+      for _, value in ipairs(vim.split(content, "\n")) do
         value = value:gsub(".*Page No.", "Page No.")
         if value == "-------------------" then
           table.insert(chunks, {})
@@ -143,72 +191,69 @@ function M.fill_from_boox()
         elseif value:match("^【Annotation】") ~= nil then
           chunks[#chunks].annotation = value:gsub("【Annotation】", "")
         elseif chunks[#chunks].annotation ~= nil then
-          chunks[#chunks].annotation = (chunks[#chunks].annotation .. " " .. value) or value
+          chunks[#chunks].annotation = chunks[#chunks].annotation .. " " .. value
         elseif chunks[#chunks].text ~= nil then
           chunks[#chunks].text = chunks[#chunks].text .. " " .. value
         elseif chunks[#chunks].page ~= nil then
           chunks[#chunks].text = value
         end
       end
-      vim.notify(chunks)
 
       chunks = vim.tbl_map(function(chunk)
-        local res = {}
-
-        if chunk.page ~= "" and chunk.page ~= nil then
+        chunk.text = chunk.text or ""
+        if chunk.page and chunk.page ~= "" then
           chunk.text = chunk.text .. " (p." .. chunk.page .. ")"
         end
 
-        if chunk.text == nil then
-          chunk.text = ""
-        end
-        chunk.text = chunk.text:gsub("\r", "")
-            :gsub("%—", "--")
-            :gsub("[%‘%’]+", "%'")
-            :gsub("  ", " ")
-            :gsub("%-%-", "—")
+        chunk.text = chunk.text
+          :gsub("\r", "")
+          :gsub("%—", "--")
+          :gsub("[%‘%’]+", "%'")
+          :gsub("  ", " ")
+          :gsub("%-%-", "—")
 
-        if chunk.annotation ~= nil then
-          table.insert(res, chunk.annotation .. ":")
+        local result = {}
+        if chunk.annotation then
+          table.insert(result, chunk.annotation .. ":")
         end
-        table.insert(res, "> " .. chunk.text)
-        table.insert(res, "")
-        return res
+        table.insert(result, "> " .. chunk.text)
+        table.insert(result, "")
+        return result
       end, chunks)
 
       local name = vim.split(item._path, "-annotation")[1]
 
-      local possible_pdf = name .. ".pdf"
-      if vim.fn.filereadable(possible_pdf) == 1 then
-        if vim.fn.filecopy(possible_pdf, vim.fs.normalize(config.current_vault.dir .. "/annotated/" .. current_id .. ".pdf")) == 1 then
-          vim.fn.delete(possible_pdf)
-          table.insert(chunks, 1, { "[[" .. current_id .. ".pdf|Annotated PDF]]", "" })
-        else
-          vim.notify("failure to copy")
-          return
+      local function copy_asset(extension, label)
+        local source = name .. extension
+        if vim.fn.filereadable(source) ~= 1 then
+          vim.notify("no " .. extension:sub(2))
+          return true
         end
-      else
-        vim.notify("no pdf")
+
+        local destination =
+          vim.fs.normalize(vim.fs.joinpath(config.current_vault.dir, "annotated", current_id .. extension))
+        if vim.fn.filecopy(source, destination) ~= 1 then
+          vim.notify("failure to copy", vim.log.levels.ERROR)
+          return false
+        end
+
+        vim.fn.delete(source)
+        table.insert(chunks, 1, {
+          ("[[%s%s|Annotated %s]]"):format(current_id, extension, label),
+          "",
+        })
+        return true
       end
 
-      local possible_epub = name .. ".epub"
-      if vim.fn.filereadable(possible_epub) == 1 then
-        if vim.fn.filecopy(possible_epub, vim.fs.normalize(config.current_vault.dir .. "/annotated/" .. current_id .. ".epub")) == 1 then
-          vim.fn.delete(possible_epub)
-          table.insert(chunks, 1, { "[[" .. current_id .. ".epub|Annotated EPUB]]", "" })
-        else
-          vim.notify("failure to copy")
-          return
-        end
-      else
-        vim.notify("no epub")
+      if not copy_asset(".pdf", "PDF") or not copy_asset(".epub", "EPUB") then
+        return
       end
 
-      content = vim.iter(chunks):flatten():totable()
-      vim.api.nvim_buf_set_lines(current_buf, -1, -1, false, content)
+      local lines = vim.iter(chunks):flatten():totable()
+      vim.api.nvim_buf_set_lines(current_buf, -1, -1, false, lines)
       vim.fn.delete(item._path)
       self:close()
-    end
+    end,
   })
 end
 

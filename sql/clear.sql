@@ -1,3 +1,5 @@
+DROP TABLE if exists embeddings;
+DROP TABLE if exists embedding_state;
 DROP TABLE if exists tags;
 DROP TABLE if exists refs;
 DROP TABLE if exists contents;

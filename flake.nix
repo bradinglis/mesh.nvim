@@ -31,6 +31,16 @@
         rustToolchain
       ];
       version = manifest.version;
+      # ONNX Runtime is loaded at runtime (ort `load-dynamic`), so it is not a
+      # build input. The version comes from the nixpkgs revision pinned in
+      # flake.lock; ort needs ONNX Runtime API >= 17.
+      onnxruntime = pkgs.onnxruntime;
+      onnxLib =
+        if onnxRuntimeOk then
+          "${onnxruntime}/lib/libonnxruntime.so"
+        else
+          throw "onnxruntime ${onnxruntime.version} is older than the 1.17 required by ort";
+      onnxRuntimeOk = pkgs.lib.versionAtLeast onnxruntime.version "1.17";
       src = pkgs.lib.fileset.toSource {
         root = ./.;
         fileset = pkgs.lib.fileset.unions [
@@ -39,8 +49,46 @@
           ./sql
           ./lua
           ./src
+          ./tests
         ];
       };
+      commonArgs = {
+        inherit
+          src
+          nativeBuildInputs
+          buildInputs
+          version
+          ;
+        dependencies = [
+          pkgs.duckdb.lib
+        ];
+        strictDeps = false;
+        cargoVendorDir = craneLib.vendorCargoDeps {
+          src = ./.;
+        };
+      };
+      # Builds both the Lua module (`lib/libmesh.so`) and the `mesh` CLI
+      # (`bin/mesh`) from the same crate.
+      binary = craneLib.buildPackage (
+        commonArgs
+        // {
+          pname = "mesh-nvim-lib";
+          cargoArtifacts = craneLib.buildDepsOnly commonArgs;
+        }
+      );
+      # The CLI loads ONNX Runtime dynamically, so wrap it with the path the
+      # flake pins. Non-semantic commands never touch it.
+      meshCli = pkgs.runCommand "mesh-cli-${version}" {
+        nativeBuildInputs = [ pkgs.makeWrapper ];
+        meta = {
+          description = "Query a mesh.nvim vault from the command line";
+          mainProgram = "mesh";
+        };
+      } ''
+        mkdir -p $out/bin
+        makeWrapper ${binary}/bin/mesh $out/bin/mesh \
+          --set ORT_DYLIB_PATH "${onnxLib}"
+      '';
     in
     {
       devShells.${system}.default = pkgs.mkShell {
@@ -50,58 +98,27 @@
           pkgs.vimPlugins.snacks-nvim
         ];
         shellHook = /* bash */ ''
+          export ORT_DYLIB_PATH="${onnxLib}"
           echo ""
           echo -e "\e[1;38;5;208m | Rust environment\e[0m"
           cargo version
         '';
       };
-      packages.${system}.default = (
-        let
-          commonArgs = {
-            inherit
-              src
-              nativeBuildInputs
-              buildInputs
-              version
-              ;
-            dependencies = [
-              pkgs.duckdb.lib
-            ];
-            strictDeps = false;
-            cargoVendorDir = craneLib.vendorMultipleCargoDeps {
-              inherit (craneLib.findCargoFiles src) cargoConfigs;
-              cargoLockList = [
-                ./Cargo.lock
-
-                # Unfortunately this approach requires IFD (import-from-derivation)
-                # otherwise Nix will refuse to read the Cargo.lock from our toolchain
-                # (unless we build with `--impure`).
-                #
-                # Another way around this is to manually copy the rustlib `Cargo.lock`
-                # to the repo and import it with `./path/to/rustlib/Cargo.lock` which
-                # will avoid IFD entirely but will require manually keeping the file
-                # up to date!
-                "${rustToolchain.passthru.availableComponents.rust-src}/lib/rustlib/src/rust/library/Cargo.lock"
-              ];
-            };
-
-          };
-
-          binary = craneLib.buildPackage (
-            commonArgs
-            // {
-              pname = "mesh-nvim-lib";
-              cargoArtifacts = craneLib.buildDepsOnly commonArgs;
-            }
-          );
-        in
-        pkgs.vimUtils.buildVimPlugin {
+      packages.${system} = {
+        mesh-cli = meshCli;
+        default = pkgs.vimUtils.buildVimPlugin {
           pname = "mesh-nvim";
           inherit version src;
 
           postPatch = ''
             mkdir -p target/release
             cp -vf ${binary}/lib/libmesh.so target/release/libmesh.so
+            cat > lua/mesh-nvim/runtime.lua <<EOF
+            return {
+              onnxruntime = "${onnxLib}",
+              onnxruntime_version = "${onnxruntime.version}",
+            }
+            EOF
           '';
 
           nvimSkipModule = [
@@ -112,8 +129,11 @@
             pkgs.duckdb.lib
             pkgs.vimPlugins.snacks-nvim
           ];
-        }
-      );
-
+        };
+      };
+      apps.${system}.mesh = {
+        type = "app";
+        program = "${meshCli}/bin/mesh";
+      };
     };
 }

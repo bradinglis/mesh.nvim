@@ -74,40 +74,72 @@ local picker_opts = {
   },
 }
 
-local set_string_width = function(text, width)
-  if (vim.fn.strdisplaywidth(text) > width) then
-    return vim.fn.strcharpart(text, -1, width) .. "…"
-  elseif vim.fn.strdisplaywidth(text) < width then
-    return text .. string.rep(" ", width - vim.fn.strdisplaywidth(text))
-  else
-    return text
+local ELLIPSIS = "…"
+
+--- Fit `text` to exactly `width` display columns, truncating with an ellipsis
+--- when needed so padded and truncated fields still line up.
+local function set_string_width(text, width)
+  text = text or ""
+  local text_width = vim.fn.strdisplaywidth(text)
+
+  if text_width <= width then
+    return text .. string.rep(" ", width - text_width)
   end
+
+  local budget = width - vim.fn.strdisplaywidth(ELLIPSIS)
+  local chars = {}
+  local used = 0
+  local index = 0
+  while used < budget do
+    local char = vim.fn.strcharpart(text, index, 1)
+    if char == "" then
+      break
+    end
+    local char_width = vim.fn.strdisplaywidth(char)
+    if used + char_width > budget then
+      break
+    end
+    chars[#chars + 1] = char
+    used = used + char_width
+    index = index + 1
+  end
+
+  local truncated = table.concat(chars) .. ELLIPSIS
+  local truncated_width = vim.fn.strdisplaywidth(truncated)
+  if truncated_width < width then
+    truncated = truncated .. string.rep(" ", width - truncated_width)
+  end
+  return truncated
 end
 
 function M.from_notes(notes)
   local i = #notes
   local entries = vim.tbl_map(function(n)
     i = i - 1
+    local title = n.title or ""
+    local authors = table.concat(n.authors or {}, ", ")
+    local text = n.text or (title .. " " .. authors .. " " .. (n.id or ""))
+
     return {
-      text = n.text or ((n.title or "") .. " " .. (table.concat(n.authors, ", ") or "") .. " " .. n.id),
-      ordinal = n.text or ((n.title or "") .. " " .. (table.concat(n.authors, ", ") or "") .. " " .. n.id),
-      title = (n.title or ""),
-      author = (table.concat(n.authors, ", ") or ""),
+      text = text,
+      ordinal = text,
+      title = title,
+      author = authors,
       kind = n.kind,
       grep_text = n.text or nil,
       direction = n.direction,
-      tags = n.tags,
+      tags = n.tags or {},
       icon = icon_dict[n.type] or "",
       score_add = (i / 30),
       file = n.path,
       id = n.id,
       pos = { n.line or 0, n.start_col or 0 },
       end_pos = { n.line or 0, n.end_col or 0 },
-      link = "[[" .. n.id .. "|" .. (n.title or "") .. "]]",
+      link = "[[" .. (n.id or "") .. "|" .. title .. "]]",
     }
   end, notes)
 
-  local notes_opts = vim.tbl_deep_extend('force', picker_opts or {}, {
+  local notes_opts = vim.tbl_deep_extend("force", picker_opts, {
     title = "Notes",
     items = entries,
     format = function(item, _)
@@ -115,13 +147,14 @@ function M.from_notes(notes)
 
       ret[#ret + 1] = { set_string_width(item.icon, 2) .. " ", "Fg" }
       if item.kind and item.direction then
-        ret[#ret + 1] = { set_string_width(link_dict[item.direction][item.kind], 14) .. " ", "Fg" }
+        local label = (link_dict[item.direction] or {})[item.kind] or item.kind
+        ret[#ret + 1] = { set_string_width(label, 14) .. " ", "Fg" }
       end
 
       if item.grep_text then
-          ret[#ret + 1] = { set_string_width("[" .. item.pos[1] .. "]", 5), "Fg" }
-          ret[#ret + 1] = { set_string_width(item.title, 40) .. " ", "markdownBoldItalic" }
-          ret[#ret + 1] = { item.grep_text, "Fg" }
+        ret[#ret + 1] = { set_string_width("[" .. item.pos[1] .. "]", 5), "Fg" }
+        ret[#ret + 1] = { set_string_width(item.title, 40) .. " ", "markdownBoldItalic" }
+        ret[#ret + 1] = { item.grep_text, "Fg" }
       else
         if item.author ~= "" then
           ret[#ret + 1] = { set_string_width(item.title, 40) .. " ", "markdownBoldItalic" }
@@ -135,7 +168,7 @@ function M.from_notes(notes)
       end
 
       return ret
-    end
+    end,
   })
 
   snacks_picker.pick(notes_opts)
@@ -146,7 +179,7 @@ function M.from_tags(tags)
     return {
       text = tag.tag .. tag.count,
       number = tag.count,
-      notes = table.concat(vim.tbl_map(function(n) return n.id end, tag.notes), " "),
+      notes = table.concat(vim.tbl_map(function(n) return n.id end, tag.notes or {}), " "),
       score_add = tag.count,
       tag = tag.tag,
       data = tag
@@ -191,13 +224,18 @@ function M.from_tags(tags)
 end
 
 function M.vault()
-  local entries = vim.iter(conf.config.vaults):map(function (k, v)
-    return {
-      text = k or v.name .. "balh",
-      dir = v.dir,
-      value = v
-    }
-  end):totable()
+  local entries = {}
+  for name, vault in pairs(conf.config.vaults) do
+    if name ~= "default" or type(vault) == "table" then
+      local vault_table = type(vault) == "table" and vault or { name = name, dir = vault }
+      entries[#entries + 1] = {
+        text = vault_table.name or name,
+        name = vault_table.name or name,
+        dir = vault_table.dir,
+        value = vault_table,
+      }
+    end
+  end
 
   local pick_opts = {
     title = "Vaults",
@@ -222,15 +260,41 @@ function M.vault()
       }
     },
     format = function(item, _)
-      return { {item.text, "Fg"} }
+      return { { item.text, "Fg" } }
     end,
     confirm = function(picker, item)
-      conf.set_vault(item.value.name, item.value.dir)
+      conf.set_vault(item.name, item.dir)
       picker:close()
     end,
   }
 
   snacks_picker.pick(pick_opts)
+end
+
+---@param items table[] from `mesh-nvim.semantic`
+---@param title string
+function M.from_semantic(items, title)
+  snacks_picker.pick({
+    title = title,
+    items = items,
+    layout = picker_opts.layout,
+    preview = "file",
+    format = function(item, _)
+      local ret = {}
+      ret[#ret + 1] = { ("%.2f "):format(item.score), "Comment" }
+      ret[#ret + 1] = { set_string_width(item.kind, 8) .. " ", "Fg" }
+      ret[#ret + 1] = { set_string_width(item.title, 36) .. " ", "markdownBoldItalic" }
+      if item.heading then
+        ret[#ret + 1] = { set_string_width(item.heading, 28) .. " ", "markdownItalic" }
+      end
+      ret[#ret + 1] = { item.snippet, "Fg" }
+      return ret
+    end,
+    confirm = function(picker, item)
+      picker:close()
+      require("mesh-nvim.buf").open({ path = item.path, row = item.row, col = item.col })
+    end,
+  })
 end
 
 return M
